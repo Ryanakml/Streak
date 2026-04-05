@@ -1,0 +1,2918 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { UserButton, useUser } from "@clerk/nextjs";
+import { useAction, useMutation, useQuery } from "convex/react";
+import { useSearchParams } from "next/navigation";
+import type { Doc } from "../../../convex/_generated/dataModel";
+import { api } from "../../../convex/_generated/api";
+import {
+  CalendarDays,
+  ChartNoAxesColumn,
+  Check,
+  MessageSquare,
+  MoonStar,
+  PencilLine,
+  Plus,
+  Sparkles,
+  Trash2,
+  UserCircle2,
+  X,
+} from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { AnimatedDock } from "@/components/ui/animated-dock";
+
+const DAYS = [
+  { key: "mon", label: "Mon" },
+  { key: "tue", label: "Tue" },
+  { key: "wed", label: "Wed" },
+  { key: "thu", label: "Thu" },
+  { key: "fri", label: "Fri" },
+  { key: "sat", label: "Sat" },
+  { key: "sun", label: "Sun" },
+] as const;
+
+const ONBOARDING_PERSONALITY = "brutal" as const;
+
+type AppTab = "home" | "chat" | "stats" | "profile";
+type HabitDoc = Doc<"habits">;
+type CheckInDoc = Doc<"checkIns">;
+type MessageDoc = Doc<"messages">;
+type WorkoutLogDoc = Doc<"workoutLogs">;
+type WeeklyReportDoc = Doc<"weeklyReports">;
+type MessageBudgetStatus = {
+  dailyMessageCount: number;
+  dailyMessageCap: number | null;
+  remainingMessages: number | null;
+  limitReached: boolean;
+  isUnlimited: boolean;
+};
+type NotificationPermissionState = NotificationPermission | "unsupported";
+type WeekCellState = "completed" | "missed" | "bonus" | "rest" | "scheduled";
+
+type HabitFormState = {
+  name: string;
+  targetDays: string[];
+  scheduledTime: string;
+  reminderTime: string;
+  checkInDeadline: string;
+  rules: string;
+  motivation: string;
+};
+
+type HabitDetailFormState = HabitFormState & {
+  isActive: boolean;
+  fridayOverrideEnabled: boolean;
+  fridayScheduledTime: string;
+  fridayReminderTime: string;
+  fridayCheckInDeadline: string;
+};
+
+const initialHabitForm: HabitFormState = {
+  name: "",
+  targetDays: ["mon", "wed", "fri", "sat"],
+  scheduledTime: "17:00",
+  reminderTime: "16:00",
+  checkInDeadline: "18:30",
+  rules: "Any workout 30+ mins",
+  motivation: "",
+};
+
+function getHabitDetailInitialForm(habit: HabitDoc): HabitDetailFormState {
+  return {
+    name: habit.name,
+    targetDays: habit.targetDays,
+    scheduledTime: habit.scheduledTime,
+    reminderTime: habit.reminderTime,
+    checkInDeadline: habit.checkInDeadline,
+    rules: habit.rules,
+    motivation: habit.motivation,
+    isActive: habit.isActive,
+    fridayOverrideEnabled: Boolean(habit.schedules?.fri),
+    fridayScheduledTime:
+      habit.schedules?.fri?.scheduledTime ?? habit.scheduledTime,
+    fridayReminderTime:
+      habit.schedules?.fri?.reminderTime ?? habit.reminderTime,
+    fridayCheckInDeadline:
+      habit.schedules?.fri?.checkInDeadline ?? habit.checkInDeadline,
+  };
+}
+
+function getTodayKey(date: Date) {
+  return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][date.getDay()];
+}
+
+function formatToday(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
+function formatTime(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatMessageTime(timestamp: number) {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function formatWorkoutDate(timestamp: number) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(timestamp));
+}
+
+function formatWeekRange(weekStart: string, weekEnd: string) {
+  const start = new Date(`${weekStart}T00:00:00`);
+  const end = new Date(`${weekEnd}T00:00:00`);
+  return `${new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(start)} - ${new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(end)}`;
+}
+
+function toDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isReminderIntent(intent: string | undefined) {
+  return (
+    intent === "reminder_pre_workout" ||
+    intent === "reminder_check_in" ||
+    intent === "reminder_late_follow_up"
+  );
+}
+
+function getReminderSeenKey(userId: string) {
+  return `streak:lastReminderSeen:${userId}`;
+}
+
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding)
+    .replaceAll("-", "+")
+    .replaceAll("_", "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+}
+
+function getClerkSubscriptionTier(metadata: unknown): "free" | "pro" {
+  if (
+    metadata &&
+    typeof metadata === "object" &&
+    "subscriptionTier" in metadata &&
+    (metadata as { subscriptionTier?: unknown }).subscriptionTier === "pro"
+  ) {
+    return "pro";
+  }
+
+  return "free";
+}
+
+function getStartOfWeek(date: Date) {
+  const next = new Date(date);
+  const day = next.getDay();
+  const diff = (day + 6) % 7;
+  next.setDate(next.getDate() - diff);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function toTitleDay(day: string) {
+  return DAYS.find((entry) => entry.key === day)?.label ?? day;
+}
+
+function sortByTimestamp<T extends { timestamp: number }>(items: T[]) {
+  return [...items].sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function getCompletionSummary(
+  checkIns: CheckInDoc[],
+  habits: HabitDoc[],
+  todayKey: string,
+) {
+  const scheduledToday = habits.filter(
+    (habit) => habit.isActive && habit.targetDays.includes(todayKey),
+  ).length;
+  const completedToday = checkIns.filter(
+    (entry) => entry.status === "completed",
+  ).length;
+  return { scheduledToday, completedToday };
+}
+
+function getWeeklyStats(allCheckIns: CheckInDoc[]) {
+  const start = getStartOfWeek(new Date());
+  const weekly = allCheckIns.filter(
+    (entry) => new Date(entry.timestamp) >= start,
+  );
+
+  return {
+    total: weekly.length,
+    completed: weekly.filter((entry) => entry.status === "completed").length,
+    missed: weekly.filter((entry) => entry.status === "missed").length,
+    bonus: weekly.filter((entry) => entry.status === "bonus").length,
+  };
+}
+
+function getWeekDays(date: Date) {
+  const start = getStartOfWeek(date);
+  return DAYS.map((day, index) => {
+    const next = new Date(start);
+    next.setDate(start.getDate() + index);
+    return {
+      key: day.key,
+      label: day.label,
+      date: next,
+      dateKey: toDateKey(next),
+    };
+  });
+}
+
+function formatExerciseSummary(log: WorkoutLogDoc) {
+  return log.exercises
+    .slice(0, 3)
+    .map((exercise) => {
+      const parts = [exercise.name];
+      if (exercise.sets && exercise.reps) {
+        parts.push(`${exercise.sets}x${exercise.reps}`);
+      } else if (exercise.duration) {
+        parts.push(`${exercise.duration}m`);
+      } else if (exercise.distance) {
+        parts.push(`${exercise.distance}km`);
+      }
+      return parts.join(" ");
+    })
+    .join(", ");
+}
+
+function formatCheckInStatus(status: CheckInDoc["status"]) {
+  if (status === "completed") return "Completed";
+  if (status === "missed") return "Missed";
+  return "Bonus";
+}
+
+function getWeeklyCellState(
+  habit: HabitDoc,
+  day: ReturnType<typeof getWeekDays>[number],
+  weeklyCheckIns: CheckInDoc[],
+  referenceDate: Date,
+): WeekCellState {
+  const checkIn = weeklyCheckIns.find(
+    (entry) => entry.habitId === habit._id && entry.date === day.dateKey,
+  );
+
+  if (checkIn) {
+    return checkIn.status;
+  }
+
+  const todayKey = toDateKey(referenceDate);
+  if (habit.targetDays.includes(day.key) && day.dateKey === todayKey) {
+    return "scheduled";
+  }
+
+  return "rest";
+}
+
+function WeekGrid({
+  habit,
+  weekDays,
+  weeklyCheckIns,
+  referenceDate,
+}: {
+  habit: HabitDoc;
+  weekDays: ReturnType<typeof getWeekDays>;
+  weeklyCheckIns: CheckInDoc[];
+  referenceDate: Date;
+}) {
+  return (
+    <div className="grid grid-cols-7 gap-2">
+      {weekDays.map((day) => {
+        const state = getWeeklyCellState(
+          habit,
+          day,
+          weeklyCheckIns,
+          referenceDate,
+        );
+        const label =
+          state === "completed"
+            ? "Done"
+            : state === "missed"
+              ? "Miss"
+              : state === "bonus"
+                ? "Bonus"
+                : state === "scheduled"
+                  ? "Due"
+                  : "Rest";
+
+        return (
+          <div
+            key={`${habit._id}-${day.dateKey}`}
+            className="space-y-2 rounded-xl border border-border bg-background p-3 text-center"
+          >
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+              {day.label}
+            </p>
+            <div
+              className={`mx-auto flex h-10 w-10 items-center justify-center rounded-full border text-xs font-mono ${
+                state === "completed"
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : state === "missed"
+                    ? "border-destructive/40 bg-destructive/10 text-foreground"
+                    : state === "bonus"
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : state === "scheduled"
+                        ? "border-border bg-card text-foreground"
+                        : "border-border bg-card text-muted-foreground"
+              }`}
+            >
+              {label}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {formatWorkoutDate(day.date.getTime())}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function HabitComposerDialog({
+  disabled,
+  onCreate,
+}: {
+  disabled: boolean;
+  onCreate: (form: HabitFormState) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<HabitFormState>(initialHabitForm);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit() {
+    setSaving(true);
+    try {
+      await onCreate(form);
+      setForm(initialHabitForm);
+      setOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger>
+        <Button type="button" disabled={disabled}>
+          <Plus />
+          New Habit
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="border-border bg-card text-card-foreground sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-mono text-2xl">Create Habit</DialogTitle>
+          <DialogDescription className="text-muted-foreground">
+            Add another live habit. Limits stay enforced from your Convex user
+            state.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-5">
+          <div className="grid gap-2">
+            <Label htmlFor="habit-name">Habit name</Label>
+            <Input
+              id="habit-name"
+              value={form.name}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, name: event.target.value }))
+              }
+              placeholder="Go to gym 4x/week"
+            />
+          </div>
+
+          <div className="grid gap-3">
+            <Label>Target days</Label>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {DAYS.map((day) => {
+                const checked = form.targetDays.includes(day.key);
+                return (
+                  <label
+                    key={day.key}
+                    className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-sm"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(value) =>
+                        setForm((current) => ({
+                          ...current,
+                          targetDays: value
+                            ? [...current.targetDays, day.key]
+                            : current.targetDays.filter(
+                                (entry) => entry !== day.key,
+                              ),
+                        }))
+                      }
+                    />
+                    <span>{day.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-2">
+              <Label htmlFor="scheduled-time">Scheduled</Label>
+              <Input
+                id="scheduled-time"
+                type="time"
+                value={form.scheduledTime}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    scheduledTime: event.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="reminder-time">Reminder</Label>
+              <Input
+                id="reminder-time"
+                type="time"
+                value={form.reminderTime}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    reminderTime: event.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="deadline-time">Deadline</Label>
+              <Input
+                id="deadline-time"
+                type="time"
+                value={form.checkInDeadline}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    checkInDeadline: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="habit-rules">What counts?</Label>
+            <Input
+              id="habit-rules"
+              value={form.rules}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  rules: event.target.value,
+                }))
+              }
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="habit-motivation">Why does this matter?</Label>
+            <Textarea
+              id="habit-motivation"
+              value={form.motivation}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  motivation: event.target.value,
+                }))
+              }
+              className="min-h-28"
+              placeholder="I am tired of quitting on myself."
+            />
+          </div>
+
+          <Button
+            type="button"
+            disabled={
+              saving ||
+              !form.name.trim() ||
+              !form.rules.trim() ||
+              !form.motivation.trim() ||
+              form.targetDays.length === 0
+            }
+            onClick={handleSubmit}
+          >
+            {saving ? "Saving..." : "Lock It In"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OnboardingFlow({
+  userName,
+  onComplete,
+}: {
+  userName: string;
+  onComplete: (form: HabitFormState) => Promise<void>;
+}) {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [form, setForm] = useState<HabitFormState>(initialHabitForm);
+  const [saving, setSaving] = useState(false);
+
+  async function finishOnboarding() {
+    setSaving(true);
+    try {
+      await onComplete(form);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="min-h-screen bg-background px-6 py-10 text-foreground">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+        <div className="space-y-3">
+          <p className="text-sm uppercase tracking-[0.35em] text-muted-foreground">
+            Streak Onboarding
+          </p>
+          <h1 className="font-mono text-4xl font-semibold tracking-tight">
+            {step === 1 && `Choose your coach, ${userName}.`}
+            {step === 2 && "What habit are you building?"}
+            {step === 3 && "Lock the first habit in."}
+          </h1>
+          <p className="max-w-2xl text-muted-foreground">
+            This is the product flow foundation. Once onboarding is complete,
+            the Home, Chat, and Profile tabs run from the same saved habit data.
+          </p>
+        </div>
+
+        {step === 1 ? (
+          <Card className="border-border bg-card text-card-foreground">
+            <CardHeader>
+              <CardTitle className="font-mono text-2xl">
+                Choose Your Coach
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <div className="rounded-xl border border-primary bg-primary/10 p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-3">
+                    <p className="font-mono text-2xl font-semibold">
+                      Brutal Mode
+                    </p>
+                    <p className="text-muted-foreground">
+                      No excuses. No fake encouragement. Just direct pressure
+                      and consistency.
+                    </p>
+                  </div>
+                  <Badge className="bg-primary text-primary-foreground">
+                    Default
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-dashed border-border p-6 text-muted-foreground">
+                Coach Mode and other personalities can layer on later. Right now
+                the app ships with the brutal coach only, exactly like your
+                spec.
+              </div>
+
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => setStep(2)}>
+                  Continue
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {step === 2 ? (
+          <Card className="border-border bg-card text-card-foreground">
+            <CardHeader>
+              <CardTitle className="font-mono text-2xl">First Habit</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-5">
+              <div className="grid gap-2">
+                <Label htmlFor="onboarding-habit-name">Habit name</Label>
+                <Input
+                  id="onboarding-habit-name"
+                  value={form.name}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="Go to gym 4x/week"
+                />
+              </div>
+
+              <div className="grid gap-2 text-sm text-muted-foreground">
+                <p>Examples:</p>
+                <p>Go to gym 4x/week</p>
+                <p>No phone before 9am</p>
+                <p>Read 30 mins daily</p>
+              </div>
+
+              <div className="flex justify-between">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setStep(1)}
+                >
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  disabled={!form.name.trim()}
+                  onClick={() => setStep(3)}
+                >
+                  Continue
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {step === 3 ? (
+          <Card className="border-border bg-card text-card-foreground">
+            <CardHeader>
+              <CardTitle className="font-mono text-2xl">
+                AI Clarification
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-6">
+              <div className="rounded-xl border border-border bg-background p-4 text-sm text-muted-foreground">
+                Alright, so you want to build{" "}
+                <span className="font-mono text-foreground">{form.name}</span>.
+                Lock down the days, timing, what counts, and why this actually
+                matters.
+              </div>
+
+              <div className="grid gap-3">
+                <Label>Which days?</Label>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {DAYS.map((day) => {
+                    const checked = form.targetDays.includes(day.key);
+                    return (
+                      <label
+                        key={day.key}
+                        className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-sm"
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) =>
+                            setForm((current) => ({
+                              ...current,
+                              targetDays: value
+                                ? [...current.targetDays, day.key]
+                                : current.targetDays.filter(
+                                    (entry) => entry !== day.key,
+                                  ),
+                            }))
+                          }
+                        />
+                        <span>{day.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-scheduled">Target time</Label>
+                  <Input
+                    id="onboarding-scheduled"
+                    type="time"
+                    value={form.scheduledTime}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        scheduledTime: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-reminder">Reminder</Label>
+                  <Input
+                    id="onboarding-reminder"
+                    type="time"
+                    value={form.reminderTime}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        reminderTime: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-deadline">Deadline</Label>
+                  <Input
+                    id="onboarding-deadline"
+                    type="time"
+                    value={form.checkInDeadline}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        checkInDeadline: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="onboarding-rules">What counts as done?</Label>
+                <Input
+                  id="onboarding-rules"
+                  value={form.rules}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      rules: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="onboarding-motivation">Why this habit?</Label>
+                <Textarea
+                  id="onboarding-motivation"
+                  value={form.motivation}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      motivation: event.target.value,
+                    }))
+                  }
+                  className="min-h-28"
+                  placeholder="I'm tired of being skinny."
+                />
+              </div>
+
+              <div className="rounded-xl border border-primary bg-primary/10 p-4">
+                <p className="font-mono text-sm uppercase tracking-[0.25em] text-primary">
+                  Confirmation
+                </p>
+                <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
+                  <p>
+                    Target:{" "}
+                    <span className="font-mono text-foreground">
+                      {form.name}
+                    </span>
+                  </p>
+                  <p>
+                    Days:{" "}
+                    <span className="font-mono text-foreground">
+                      {form.targetDays.map(toTitleDay).join(" / ")}
+                    </span>
+                  </p>
+                  <p>
+                    Schedule:{" "}
+                    <span className="font-mono text-foreground">
+                      {form.scheduledTime} with reminder at {form.reminderTime}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-between">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setStep(2)}
+                >
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  disabled={
+                    saving ||
+                    form.targetDays.length === 0 ||
+                    !form.rules.trim() ||
+                    !form.motivation.trim()
+                  }
+                  onClick={finishOnboarding}
+                >
+                  {saving ? "Saving..." : "Yes, Let’s Go"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
+    </main>
+  );
+}
+
+function HomeTab({
+  habits,
+  todayKey,
+  todayCheckIns,
+  pendingHabitId,
+  onOpenChat,
+  onMarkComplete,
+  onToggleActive,
+  onDeleteHabit,
+  onOpenDetail,
+  canAddHabit,
+  onCreateHabit,
+}: {
+  habits: HabitDoc[];
+  todayKey: string;
+  todayCheckIns: CheckInDoc[];
+  pendingHabitId: string | null;
+  onOpenChat: () => void;
+  onMarkComplete: (habit: HabitDoc) => Promise<void>;
+  onToggleActive: (habit: HabitDoc) => Promise<void>;
+  onDeleteHabit: (habit: HabitDoc) => Promise<void>;
+  onOpenDetail: (habit: HabitDoc) => void;
+  canAddHabit: boolean;
+  onCreateHabit: (form: HabitFormState) => Promise<void>;
+}) {
+  const todayHabits = habits.filter((habit) =>
+    habit.targetDays.includes(todayKey),
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-mono text-2xl font-semibold">Home</h2>
+          <p className="text-sm text-muted-foreground">
+            Quick actions, current streaks, and today&apos;s targets.
+          </p>
+        </div>
+        <HabitComposerDialog disabled={!canAddHabit} onCreate={onCreateHabit} />
+      </div>
+
+      {todayHabits.length === 0 ? (
+        <Card className="border-border bg-card">
+          <CardContent className="flex flex-col gap-3 p-6">
+            <p className="font-mono text-lg">Rest day.</p>
+            <p className="text-sm text-muted-foreground">
+              No target habit is scheduled today. Use the chat tab if you want
+              to log a bonus session or plan ahead.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {habits.map((habit) => {
+        const checkIn = todayCheckIns.find(
+          (entry) => entry.habitId === habit._id,
+        );
+        const scheduledToday = habit.targetDays.includes(todayKey);
+
+        return (
+          <Card key={habit._id} className="border-border bg-card">
+            <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-3">
+                <CardTitle className="font-mono text-2xl">
+                  {habit.name}
+                </CardTitle>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    {scheduledToday ? "Scheduled today" : "Rest day"}
+                  </Badge>
+                  <Badge variant="outline">
+                    {habit.isActive ? "Active" : "Paused"}
+                  </Badge>
+                  {checkIn ? (
+                    <Badge className="bg-primary text-primary-foreground">
+                      {checkIn.status}
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenDetail(habit)}
+                >
+                  <PencilLine />
+                  Details
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onToggleActive(habit)}
+                  disabled={pendingHabitId === habit._id}
+                >
+                  {habit.isActive ? "Pause" : "Resume"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => onDeleteHabit(habit)}
+                  disabled={pendingHabitId === habit._id}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            </CardHeader>
+
+            <CardContent className="grid gap-6 lg:grid-cols-[1fr_auto]">
+              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                    Schedule
+                  </p>
+                  <p className="font-mono">{habit.scheduledTime}</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                    Reminder
+                  </p>
+                  <p className="font-mono">{habit.reminderTime}</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                    Deadline
+                  </p>
+                  <p className="font-mono">{habit.checkInDeadline}</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                    Streak
+                  </p>
+                  <p className="font-mono">{habit.currentStreak} days</p>
+                </div>
+              </div>
+
+              <div className="flex min-w-44 flex-col gap-3">
+                <Button
+                  type="button"
+                  disabled={
+                    pendingHabitId === habit._id ||
+                    !!checkIn ||
+                    !habit.isActive ||
+                    !scheduledToday
+                  }
+                  onClick={() => onMarkComplete(habit)}
+                >
+                  {checkIn?.status === "completed"
+                    ? "Already logged"
+                    : "Mark Complete"}
+                </Button>
+                <Button type="button" variant="outline" onClick={onOpenChat}>
+                  <MessageSquare />
+                  Chat With AI
+                </Button>
+              </div>
+
+              <div className="space-y-3 lg:col-span-2">
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-mono text-foreground">Rules:</span>{" "}
+                  {habit.rules}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-mono text-foreground">Motivation:</span>{" "}
+                  {habit.motivation}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {habit.targetDays.map((day) => (
+                    <Badge key={`${habit._id}-${day}`} variant="outline">
+                      {toTitleDay(day)}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChatTab({
+  messages,
+  habits,
+  budgetStatus,
+  billingPending,
+  errorMessage,
+  input,
+  setInput,
+  sending,
+  onSend,
+  onQuickComplete,
+  onQuickMiss,
+  onUpgrade,
+}: {
+  messages: MessageDoc[];
+  habits: HabitDoc[];
+  budgetStatus: {
+    dailyMessageCount: number;
+    dailyMessageCap: number | null;
+    remainingMessages: number | null;
+    limitReached: boolean;
+    isUnlimited: boolean;
+  } | null;
+  billingPending: "free" | "pro" | null;
+  errorMessage: string | null;
+  input: string;
+  setInput: (value: string) => void;
+  sending: boolean;
+  onSend: (content: string) => Promise<void>;
+  onQuickComplete: () => Promise<void>;
+  onQuickMiss: () => Promise<void>;
+  onUpgrade: () => Promise<void>;
+}) {
+  const sortedMessages = sortByTimestamp(messages);
+  const limitReached = budgetStatus?.limitReached ?? false;
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h2 className="font-mono text-2xl font-semibold">Chat</h2>
+        <p className="text-sm text-muted-foreground">
+          Persistent conversation backed by Convex messages. This is the base
+          layer for the AI-first workflow.
+        </p>
+      </div>
+
+      <Card className="border-border bg-card">
+        <CardContent className="space-y-4 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 text-sm text-muted-foreground">
+            <span>
+              {budgetStatus?.isUnlimited
+                ? "Pro tier: unlimited daily coach messages."
+                : `Daily budget: ${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
+            </span>
+            <span className="font-mono text-foreground">
+              {budgetStatus?.isUnlimited
+                ? "Unlimited"
+                : `${budgetStatus?.remainingMessages ?? 20} left`}
+            </span>
+          </div>
+
+          {limitReached ? (
+            <div className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm">
+              <p className="text-foreground">
+                You burned through today&apos;s free chat budget. Read-only
+                still works. Upgrade if you want more messages right now.
+              </p>
+              <div>
+                <Button
+                  type="button"
+                  disabled={billingPending !== null}
+                  onClick={() => void onUpgrade()}
+                >
+                  {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {errorMessage ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground">
+              {errorMessage}
+            </div>
+          ) : null}
+
+          <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+            {sortedMessages.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border bg-background p-4 text-sm text-muted-foreground">
+                No messages yet. Start the conversation or use one of the quick
+                actions below.
+              </div>
+            ) : null}
+
+            {sortedMessages.map((message) => (
+              <div
+                key={message._id}
+                className={`max-w-[85%] rounded-xl border px-4 py-3 text-sm ${
+                  message.role === "ai"
+                    ? "border-primary/40 bg-primary/10 text-foreground"
+                    : "ml-auto border-border bg-background text-foreground"
+                }`}
+              >
+                <div className="mb-1 flex items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                  <span>{message.role === "ai" ? "Coach" : "You"}</span>
+                  <span>{formatMessageTime(message.timestamp)}</span>
+                </div>
+                <p className="leading-6">{message.content}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={sending || limitReached}
+              onClick={onQuickComplete}
+            >
+              <Check />
+              Mark today done
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={sending || limitReached}
+              onClick={onQuickMiss}
+            >
+              <MoonStar />I skipped today
+            </Button>
+            {habits.length > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  setInput(
+                    `How am I doing with ${habits[0]?.name ?? "my habit"}?`,
+                  )
+                }
+              >
+                <Sparkles />
+                Ask AI
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+            <Textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              className="min-h-24"
+              disabled={limitReached}
+              placeholder={
+                limitReached
+                  ? "Daily free chat cap reached. Upgrade or wait for reset."
+                  : "Type a message to your coach..."
+              }
+            />
+            <Button
+              type="button"
+              disabled={sending || !input.trim() || limitReached}
+              onClick={() => onSend(input)}
+            >
+              {sending ? "Sending..." : "Send"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function StatsTab({
+  habits,
+  checkIns,
+  workoutLogs,
+  latestReport,
+  referenceDate,
+  onOpenDetail,
+}: {
+  habits: HabitDoc[];
+  checkIns: CheckInDoc[];
+  workoutLogs: WorkoutLogDoc[];
+  latestReport: WeeklyReportDoc | null;
+  referenceDate: Date;
+  onOpenDetail: (habit: HabitDoc) => void;
+}) {
+  const weekDays = getWeekDays(referenceDate);
+  const weekStart = weekDays[0]?.date ?? referenceDate;
+  const weekEnd = weekDays[6]?.date ?? referenceDate;
+  const weekStartTs = weekStart.getTime();
+  const weekEndTs = new Date(weekEnd).setHours(23, 59, 59, 999);
+  const weeklyCheckIns = checkIns.filter(
+    (entry) => entry.timestamp >= weekStartTs && entry.timestamp <= weekEndTs,
+  );
+  const activeHabits = habits.filter((habit) => habit.isActive);
+  const bestStreak = Math.max(
+    0,
+    ...activeHabits.map((habit) => habit.bestStreak),
+  );
+
+  function getRecentLogsForHabit(habitId: HabitDoc["_id"]) {
+    return workoutLogs
+      .filter((log) => log.habitId === habitId)
+      .sort((left, right) => {
+        const leftCheckIn = checkIns.find(
+          (entry) => entry._id === left.checkInId,
+        );
+        const rightCheckIn = checkIns.find(
+          (entry) => entry._id === right.checkInId,
+        );
+        return (rightCheckIn?.timestamp ?? 0) - (leftCheckIn?.timestamp ?? 0);
+      })
+      .slice(0, 3);
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h2 className="font-mono text-2xl font-semibold">Stats</h2>
+        <p className="text-sm text-muted-foreground">
+          Read-only weekly performance and recent workout logs from your live
+          data.
+        </p>
+      </div>
+
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="font-mono text-xl">This Week</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+              Active habits
+            </p>
+            <p className="mt-2 font-mono text-3xl">{activeHabits.length}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+              Completed
+            </p>
+            <p className="mt-2 font-mono text-3xl">
+              {
+                weeklyCheckIns.filter((entry) => entry.status === "completed")
+                  .length
+              }
+            </p>
+          </div>
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+              Missed
+            </p>
+            <p className="mt-2 font-mono text-3xl">
+              {
+                weeklyCheckIns.filter((entry) => entry.status === "missed")
+                  .length
+              }
+            </p>
+          </div>
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+              Bonus
+            </p>
+            <p className="mt-2 font-mono text-3xl">
+              {
+                weeklyCheckIns.filter((entry) => entry.status === "bonus")
+                  .length
+              }
+            </p>
+          </div>
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+              Best streak
+            </p>
+            <p className="mt-2 font-mono text-3xl">{bestStreak}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {latestReport ? (
+        <Card className="border-primary/30 bg-card">
+          <CardHeader>
+            <CardTitle className="font-mono text-xl">
+              Latest Weekly Review
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className="bg-primary text-primary-foreground">
+                {habits.find((habit) => habit._id === latestReport.habitId)
+                  ?.name ?? "Habit review"}
+              </Badge>
+              <Badge variant="outline">
+                {formatWeekRange(latestReport.weekStart, latestReport.weekEnd)}
+              </Badge>
+              <Badge variant="outline">
+                {latestReport.actualCount}/{latestReport.targetCount}
+              </Badge>
+              <Badge variant="outline">Bonus {latestReport.bonusCount}</Badge>
+              <Badge variant="outline">
+                {Math.round(latestReport.completionRate)}%
+              </Badge>
+            </div>
+            <p className="text-sm leading-6 text-foreground">
+              {latestReport.aiRoast}
+            </p>
+            {latestReport.missedDaysReasons.length > 0 ? (
+              <div className="rounded-xl border border-border bg-background p-4 text-sm text-muted-foreground">
+                {latestReport.missedDaysReasons
+                  .slice(0, 3)
+                  .map((entry) => `${entry.day}: ${entry.reason}`)
+                  .join(" | ")}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {habits.map((habit) => {
+        const habitCheckIns = weeklyCheckIns.filter(
+          (entry) => entry.habitId === habit._id,
+        );
+        const completedCount = habitCheckIns.filter(
+          (entry) => entry.status === "completed",
+        ).length;
+        const targetCount = weekDays.filter((day) =>
+          habit.targetDays.includes(day.key),
+        ).length;
+        const recentLogs = getRecentLogsForHabit(habit._id);
+
+        return (
+          <Card key={habit._id} className="border-border bg-card">
+            <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-2">
+                <CardTitle className="font-mono text-2xl">
+                  {habit.name}
+                </CardTitle>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">Streak {habit.currentStreak}</Badge>
+                  <Badge variant="outline">Best {habit.bestStreak}</Badge>
+                  <Badge className="bg-primary text-primary-foreground">
+                    {completedCount}/{targetCount} this week
+                  </Badge>
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenDetail(habit)}
+              >
+                <PencilLine />
+                Details
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <WeekGrid
+                habit={habit}
+                weekDays={weekDays}
+                weeklyCheckIns={weeklyCheckIns}
+                referenceDate={referenceDate}
+              />
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm uppercase tracking-[0.25em] text-muted-foreground">
+                    Recent workouts
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Bonus workouts are included here.
+                  </p>
+                </div>
+                {recentLogs.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border bg-background p-4 text-sm text-muted-foreground">
+                    No workout logs yet for this habit.
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {recentLogs.map((log) => {
+                      const checkIn = checkIns.find(
+                        (entry) => entry._id === log.checkInId,
+                      );
+                      return (
+                        <div
+                          key={log._id}
+                          className="rounded-xl border border-border bg-background p-4"
+                        >
+                          <div className="flex items-center justify-between gap-4">
+                            <p className="font-mono text-sm">
+                              {checkIn
+                                ? formatWorkoutDate(checkIn.timestamp)
+                                : "Unknown date"}
+                            </p>
+                            {checkIn ? (
+                              <Badge variant="outline">{checkIn.status}</Badge>
+                            ) : null}
+                          </div>
+                          <p className="mt-2 text-sm text-foreground">
+                            {formatExerciseSummary(log)}
+                          </p>
+                          {log.notes ? (
+                            <p className="mt-2 text-sm text-muted-foreground">
+                              {log.notes}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function HabitDetailPanel({
+  open,
+  habit,
+  allCheckIns,
+  allWorkoutLogs,
+  referenceDate,
+  saving,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  habit: HabitDoc | null;
+  allCheckIns: CheckInDoc[];
+  allWorkoutLogs: WorkoutLogDoc[];
+  referenceDate: Date;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (habit: HabitDoc, form: HabitDetailFormState) => Promise<void>;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState<HabitDetailFormState | null>(() =>
+    habit ? getHabitDetailInitialForm(habit) : null,
+  );
+
+  if (!open || !habit || !form) {
+    return null;
+  }
+
+  const currentHabit = habit;
+  const currentForm = form;
+
+  const weekDays = getWeekDays(referenceDate);
+  const weekStart = weekDays[0]?.date ?? referenceDate;
+  const weekEnd = weekDays[6]?.date ?? referenceDate;
+  const weekStartTs = weekStart.getTime();
+  const weekEndTs = new Date(weekEnd).setHours(23, 59, 59, 999);
+  const habitCheckIns = allCheckIns
+    .filter((entry) => entry.habitId === habit._id)
+    .sort((left, right) => right.timestamp - left.timestamp);
+  const weeklyCheckIns = habitCheckIns.filter(
+    (entry) => entry.timestamp >= weekStartTs && entry.timestamp <= weekEndTs,
+  );
+  const recentLogs = allWorkoutLogs
+    .filter((log) => log.habitId === habit._id)
+    .sort((left, right) => {
+      const leftCheckIn = allCheckIns.find(
+        (entry) => entry._id === left.checkInId,
+      );
+      const rightCheckIn = allCheckIns.find(
+        (entry) => entry._id === right.checkInId,
+      );
+      return (rightCheckIn?.timestamp ?? 0) - (leftCheckIn?.timestamp ?? 0);
+    })
+    .slice(0, 5);
+  const recentHistory = habitCheckIns.slice(0, 8);
+
+  async function handleSave() {
+    await onSave(currentHabit, currentForm);
+    setIsEditing(false);
+  }
+
+  function updateForm<K extends keyof HabitDetailFormState>(
+    key: K,
+    value: HabitDetailFormState[K],
+  ) {
+    setForm((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        className="absolute inset-0 bg-background/70 backdrop-blur-sm"
+        onClick={onClose}
+        aria-label="Close habit detail"
+      />
+      <aside className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l border-border bg-card p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+              Habit Detail
+            </p>
+            <h2 className="font-mono text-3xl font-semibold">{habit.name}</h2>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">
+                {habit.isActive ? "Active" : "Paused"}
+              </Badge>
+              <Badge variant="outline">Streak {habit.currentStreak}</Badge>
+              <Badge variant="outline">Best {habit.bestStreak}</Badge>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsEditing((current) => !current)}
+            >
+              <PencilLine />
+              {isEditing ? "Cancel edit" : "Edit"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={onClose}
+            >
+              <X />
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-6">
+          {isEditing ? (
+            <Card className="border-border bg-background">
+              <CardHeader>
+                <CardTitle className="font-mono text-xl">Edit Habit</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-5">
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-name">Habit name</Label>
+                  <Input
+                    id="detail-name"
+                    value={form.name}
+                    onChange={(event) => updateForm("name", event.target.value)}
+                  />
+                </div>
+
+                <div className="grid gap-3">
+                  <Label>Target days</Label>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {DAYS.map((day) => {
+                      const checked = form.targetDays.includes(day.key);
+                      return (
+                        <label
+                          key={day.key}
+                          className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 text-sm"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) =>
+                              updateForm(
+                                "targetDays",
+                                value
+                                  ? [...form.targetDays, day.key]
+                                  : form.targetDays.filter(
+                                      (entry) => entry !== day.key,
+                                    ),
+                              )
+                            }
+                          />
+                          <span>{day.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="detail-scheduled-time">Scheduled</Label>
+                    <Input
+                      id="detail-scheduled-time"
+                      type="time"
+                      value={form.scheduledTime}
+                      onChange={(event) =>
+                        updateForm("scheduledTime", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="detail-reminder-time">Reminder</Label>
+                    <Input
+                      id="detail-reminder-time"
+                      type="time"
+                      value={form.reminderTime}
+                      onChange={(event) =>
+                        updateForm("reminderTime", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="detail-deadline-time">Deadline</Label>
+                    <Input
+                      id="detail-deadline-time"
+                      type="time"
+                      value={form.checkInDeadline}
+                      onChange={(event) =>
+                        updateForm("checkInDeadline", event.target.value)
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-rules">What counts?</Label>
+                  <Input
+                    id="detail-rules"
+                    value={form.rules}
+                    onChange={(event) =>
+                      updateForm("rules", event.target.value)
+                    }
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-motivation">Motivation</Label>
+                  <Textarea
+                    id="detail-motivation"
+                    className="min-h-24"
+                    value={form.motivation}
+                    onChange={(event) =>
+                      updateForm("motivation", event.target.value)
+                    }
+                  />
+                </div>
+
+                <label className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm">
+                  <Checkbox
+                    checked={form.isActive}
+                    onCheckedChange={(value) =>
+                      updateForm("isActive", Boolean(value))
+                    }
+                  />
+                  <span>{form.isActive ? "Habit active" : "Habit paused"}</span>
+                </label>
+
+                <Card className="border-border bg-card">
+                  <CardHeader>
+                    <CardTitle className="font-mono text-lg">
+                      Friday Override
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4">
+                    <label className="flex items-center gap-3 rounded-lg border border-border bg-background px-4 py-3 text-sm">
+                      <Checkbox
+                        checked={form.fridayOverrideEnabled}
+                        onCheckedChange={(value) =>
+                          updateForm("fridayOverrideEnabled", Boolean(value))
+                        }
+                      />
+                      <span>
+                        {form.fridayOverrideEnabled
+                          ? "Custom Friday schedule enabled"
+                          : "Use default Friday schedule"}
+                      </span>
+                    </label>
+
+                    {form.fridayOverrideEnabled ? (
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="grid gap-2">
+                          <Label htmlFor="friday-scheduled-time">
+                            Friday scheduled
+                          </Label>
+                          <Input
+                            id="friday-scheduled-time"
+                            type="time"
+                            value={form.fridayScheduledTime}
+                            onChange={(event) =>
+                              updateForm(
+                                "fridayScheduledTime",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="friday-reminder-time">
+                            Friday reminder
+                          </Label>
+                          <Input
+                            id="friday-reminder-time"
+                            type="time"
+                            value={form.fridayReminderTime}
+                            onChange={(event) =>
+                              updateForm(
+                                "fridayReminderTime",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="friday-deadline-time">
+                            Friday deadline
+                          </Label>
+                          <Input
+                            id="friday-deadline-time"
+                            type="time"
+                            value={form.fridayCheckInDeadline}
+                            onChange={(event) =>
+                              updateForm(
+                                "fridayCheckInDeadline",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    disabled={
+                      saving ||
+                      !form.name.trim() ||
+                      form.targetDays.length === 0 ||
+                      !form.rules.trim() ||
+                      !form.motivation.trim()
+                    }
+                    onClick={() => void handleSave()}
+                  >
+                    {saving ? "Saving..." : "Save changes"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card className="border-border bg-background">
+            <CardHeader>
+              <CardTitle className="font-mono text-xl">Schedule</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-3">
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Default scheduled
+                </p>
+                <p className="mt-2 font-mono text-xl">{habit.scheduledTime}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Default reminder
+                </p>
+                <p className="mt-2 font-mono text-xl">{habit.reminderTime}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Default deadline
+                </p>
+                <p className="mt-2 font-mono text-xl">
+                  {habit.checkInDeadline}
+                </p>
+              </div>
+              <div className="sm:col-span-3 rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Target days
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {habit.targetDays.map((day) => (
+                    <Badge key={`${habit._id}-detail-${day}`} variant="outline">
+                      {toTitleDay(day)}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+              <div className="sm:col-span-3 rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Friday override
+                </p>
+                {habit.schedules?.fri ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <p className="font-mono">
+                      {habit.schedules.fri.scheduledTime}
+                    </p>
+                    <p className="font-mono">
+                      {habit.schedules.fri.reminderTime}
+                    </p>
+                    <p className="font-mono">
+                      {habit.schedules.fri.checkInDeadline}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Friday uses the default schedule.
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border bg-background">
+            <CardHeader>
+              <CardTitle className="font-mono text-xl">
+                Rules and Motivation
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Rules
+                </p>
+                <p className="mt-2 text-sm text-foreground">{habit.rules}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                  Motivation
+                </p>
+                <p className="mt-2 text-sm text-foreground">
+                  {habit.motivation}
+                </p>
+              </div>
+              {!habit.isActive ? (
+                <div className="rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm text-foreground">
+                  This habit is paused. History stays intact, but reminders and
+                  active scheduling are off until you resume it.
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border bg-background">
+            <CardHeader>
+              <CardTitle className="font-mono text-xl">This Week</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <WeekGrid
+                habit={currentHabit}
+                weekDays={weekDays}
+                weeklyCheckIns={weeklyCheckIns}
+                referenceDate={referenceDate}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="border-border bg-background">
+            <CardHeader>
+              <CardTitle className="font-mono text-xl">
+                Recent History
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {recentHistory.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
+                  No check-ins yet for this habit.
+                </div>
+              ) : (
+                recentHistory.map((entry) => (
+                  <div
+                    key={entry._id}
+                    className="rounded-xl border border-border bg-card p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="font-mono text-sm">{entry.date}</p>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="outline">
+                          {formatCheckInStatus(entry.status)}
+                        </Badge>
+                        <Badge variant="outline">{entry.source}</Badge>
+                      </div>
+                    </div>
+                    {entry.userReason ? (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        Reason: {entry.userReason}
+                      </p>
+                    ) : null}
+                    {entry.conversationSummary ? (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {entry.conversationSummary}
+                      </p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border bg-background">
+            <CardHeader>
+              <CardTitle className="font-mono text-xl">
+                Recent Workout Logs
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {recentLogs.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
+                  No workout logs yet for this habit.
+                </div>
+              ) : (
+                recentLogs.map((log) => {
+                  const checkIn = allCheckIns.find(
+                    (entry) => entry._id === log.checkInId,
+                  );
+                  return (
+                    <div
+                      key={log._id}
+                      className="rounded-xl border border-border bg-card p-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="font-mono text-sm">
+                          {checkIn
+                            ? formatWorkoutDate(checkIn.timestamp)
+                            : "Unknown date"}
+                        </p>
+                        {checkIn ? (
+                          <Badge variant="outline">
+                            {formatCheckInStatus(checkIn.status)}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 text-sm text-foreground">
+                        {formatExerciseSummary(log)}
+                      </p>
+                      {log.notes ? (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {log.notes}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ProfileTab({
+  email,
+  tier,
+  budgetStatus,
+  weeklyStats,
+  habits,
+  checkIns,
+  billingPending,
+  notificationPermission,
+  notificationsEnabled,
+  notificationPending,
+  onEnableNotifications,
+  onBillingChange,
+}: {
+  email: string;
+  tier: "free" | "pro";
+  budgetStatus: {
+    dailyMessageCount: number;
+    dailyMessageCap: number | null;
+    remainingMessages: number | null;
+    limitReached: boolean;
+    isUnlimited: boolean;
+  } | null;
+  weeklyStats: ReturnType<typeof getWeeklyStats>;
+  habits: HabitDoc[];
+  checkIns: CheckInDoc[];
+  billingPending: "free" | "pro" | null;
+  notificationPermission: NotificationPermissionState;
+  notificationsEnabled: boolean;
+  notificationPending: boolean;
+  onEnableNotifications: () => Promise<void>;
+  onBillingChange: (tier: "free" | "pro") => Promise<void>;
+}) {
+  const bestStreak = Math.max(0, ...habits.map((habit) => habit.bestStreak));
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h2 className="font-mono text-2xl font-semibold">Profile</h2>
+        <p className="text-sm text-muted-foreground">
+          Account controls, plan state, and the current progress readout.
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+        <Card className="border-border bg-card">
+          <CardHeader className="flex flex-row items-start justify-between">
+            <div className="space-y-2">
+              <CardTitle className="font-mono text-xl">Account</CardTitle>
+              <p className="text-sm text-muted-foreground">{email}</p>
+            </div>
+            <UserButton />
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-muted-foreground">
+            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+              <span>Current tier</span>
+              <Badge className="bg-primary text-primary-foreground">
+                {tier.toUpperCase()}
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+              <span>Daily messages used</span>
+              <span className="font-mono text-foreground">
+                {budgetStatus?.isUnlimited
+                  ? "Unlimited"
+                  : `${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
+              </span>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+              <span>Messages remaining</span>
+              <span className="font-mono text-foreground">
+                {budgetStatus?.isUnlimited
+                  ? "Unlimited"
+                  : (budgetStatus?.remainingMessages ?? 20)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+              <span>Reminder notifications</span>
+              <span className="font-mono text-foreground">
+                {notificationPermission === "unsupported"
+                  ? "Unsupported"
+                  : notificationsEnabled
+                    ? "Enabled"
+                    : notificationPermission === "denied"
+                      ? "Blocked"
+                      : "Disabled"}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                disabled={billingPending !== null}
+                onClick={() => onBillingChange("pro")}
+              >
+                {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={billingPending !== null}
+                onClick={() => onBillingChange("free")}
+              >
+                {billingPending === "free" ? "Updating..." : "Downgrade"}
+              </Button>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                notificationPending || notificationPermission === "unsupported"
+              }
+              onClick={() => void onEnableNotifications()}
+            >
+              {notificationPending
+                ? "Enabling..."
+                : notificationsEnabled
+                  ? "Notifications Enabled"
+                  : notificationPermission === "denied"
+                    ? "Notifications Blocked"
+                    : "Enable Reminders"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border bg-card">
+          <CardHeader>
+            <CardTitle className="font-mono text-xl">Stats Readout</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-xl border border-border bg-background p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Active habits
+              </p>
+              <p className="mt-2 font-mono text-3xl">
+                {habits.filter((habit) => habit.isActive).length}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Best streak
+              </p>
+              <p className="mt-2 font-mono text-3xl">{bestStreak}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Week completed
+              </p>
+              <p className="mt-2 font-mono text-3xl">{weeklyStats.completed}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Week missed
+              </p>
+              <p className="mt-2 font-mono text-3xl">{weeklyStats.missed}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Bonus sessions
+              </p>
+              <p className="mt-2 font-mono text-3xl">{weeklyStats.bonus}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Total logs
+              </p>
+              <p className="mt-2 font-mono text-3xl">{checkIns.length}</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+export function DashboardShell() {
+  const { user, isLoaded } = useUser();
+  const searchParams = useSearchParams();
+  const syncAttempted = useRef(false);
+  const seededWelcome = useRef(false);
+  const pushSyncAttempted = useRef(false);
+  const [activeTab, setActiveTab] = useState<AppTab>("home");
+  const [pendingHabitId, setPendingHabitId] = useState<string | null>(null);
+  const [billingPending, setBillingPending] = useState<"free" | "pro" | null>(
+    null,
+  );
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermissionState>(
+      typeof window === "undefined"
+        ? "unsupported"
+        : "Notification" in window
+          ? window.Notification.permission
+          : "unsupported",
+    );
+  const [notificationPending, setNotificationPending] = useState(false);
+  const [lastSeenReminderTimestamp, setLastSeenReminderTimestamp] = useState(0);
+  const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
+  const [detailSaving, setDetailSaving] = useState(false);
+  const [chatErrorMessage, setChatErrorMessage] = useState<string | null>(null);
+
+  const syncUser = useMutation(api.users.syncUser);
+  const updateProfile = useMutation(api.users.updateProfile);
+  const refreshDailyMessageBudget = useMutation(
+    api.users.refreshDailyMessageBudget,
+  );
+  const createHabit = useMutation(api.habits.create);
+  const updateHabit = useMutation(api.habits.update);
+  const deleteHabit = useMutation(api.habits.remove);
+  const createCheckIn = useMutation(api.checkIns.create);
+  const createMessage = useMutation(api.messages.create);
+  const sendChatMessage = useAction(api.chatAction.sendMessage);
+  const subscribeToNotifications = useMutation(api.notifications.subscribe);
+
+  const convexUser = useQuery(api.users.getCurrent, {});
+  const notificationStatus = useQuery(
+    api.notifications.getCurrentStatus,
+    convexUser ? {} : "skip",
+  );
+  const messageBudgetStatus = useQuery(
+    api.users.getMessageBudgetStatus,
+    convexUser ? {} : "skip",
+  );
+  const today = useMemo(() => new Date(), []);
+  const todayKey = getTodayKey(today);
+  const todayDate = toDateKey(today);
+  const clerkTier = getClerkSubscriptionTier(user?.publicMetadata);
+  const currentTimezone =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : undefined;
+  const publicVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+
+  const habits = useQuery(
+    api.habits.listByUser,
+    convexUser ? { userId: convexUser._id, includeInactive: true } : "skip",
+  );
+  const todayCheckIns = useQuery(
+    api.checkIns.listByUserDate,
+    convexUser ? { userId: convexUser._id, date: todayDate } : "skip",
+  );
+  const allCheckIns = useQuery(
+    api.checkIns.listByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+  const workoutLogs = useQuery(
+    api.workoutLogs.listByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+  const weeklyReports = useQuery(
+    api.weeklyReports.latestByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+  const messages = useQuery(
+    api.messages.listByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+
+  async function registerReminderWorker() {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
+      throw new Error("Service workers are not supported");
+    }
+
+    return await navigator.serviceWorker.register("/reminder-sw.js");
+  }
+
+  async function syncBrowserSubscription() {
+    if (
+      !publicVapidKey ||
+      typeof window === "undefined" ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !convexUser
+    ) {
+      return false;
+    }
+
+    const registration = await registerReminderWorker();
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicVapidKey),
+      });
+    }
+
+    const serialized = subscription.toJSON();
+    if (
+      !serialized.endpoint ||
+      !serialized.keys?.auth ||
+      !serialized.keys?.p256dh
+    ) {
+      throw new Error("Push subscription is missing required keys");
+    }
+
+    await subscribeToNotifications({
+      endpoint: serialized.endpoint,
+      expirationTime: serialized.expirationTime ?? undefined,
+      keys: {
+        auth: serialized.keys.auth,
+        p256dh: serialized.keys.p256dh,
+      },
+    });
+
+    return true;
+  }
+
+  useEffect(() => {
+    if (
+      !isLoaded ||
+      !user ||
+      convexUser !== null ||
+      syncAttempted.current ||
+      !user.primaryEmailAddress?.emailAddress
+    ) {
+      return;
+    }
+
+    syncAttempted.current = true;
+    void syncUser({
+      clerkId: user.id,
+      email: user.primaryEmailAddress.emailAddress,
+      firstName: user.firstName ?? undefined,
+      lastName: user.lastName ?? undefined,
+      timezone: currentTimezone,
+      subscriptionTier: clerkTier,
+      aiPersonality: ONBOARDING_PERSONALITY,
+    }).catch(() => {
+      syncAttempted.current = false;
+    });
+  }, [clerkTier, convexUser, currentTimezone, isLoaded, syncUser, user]);
+
+  useEffect(() => {
+    if (
+      !isLoaded ||
+      !user ||
+      !convexUser ||
+      !user.primaryEmailAddress?.emailAddress ||
+      (convexUser.subscriptionTier === clerkTier &&
+        convexUser.timezone === currentTimezone)
+    ) {
+      return;
+    }
+
+    void syncUser({
+      clerkId: user.id,
+      email: user.primaryEmailAddress.emailAddress,
+      firstName: user.firstName ?? undefined,
+      lastName: user.lastName ?? undefined,
+      timezone: currentTimezone,
+      subscriptionTier: clerkTier,
+      aiPersonality: ONBOARDING_PERSONALITY,
+    });
+  }, [clerkTier, convexUser, currentTimezone, isLoaded, syncUser, user]);
+
+  useEffect(() => {
+    if (
+      !convexUser ||
+      !messages ||
+      messages.length > 0 ||
+      !convexUser.onboardingCompleted ||
+      seededWelcome.current
+    ) {
+      return;
+    }
+
+    seededWelcome.current = true;
+    const upcoming = habits?.find((habit) =>
+      habit.targetDays.includes(todayKey),
+    );
+    void createMessage({
+      userId: convexUser._id,
+      habitId: upcoming?._id,
+      role: "ai",
+      content: upcoming
+        ? `Morning. ${upcoming.name} is scheduled for ${upcoming.scheduledTime}. I'll be here when you either do it or dodge it.`
+        : "No target habit is scheduled today. Use the day well anyway.",
+      intent: "check_in",
+    });
+  }, [convexUser, createMessage, habits, messages, todayKey]);
+
+  useEffect(() => {
+    const requestedTab = searchParams.get("tab");
+    if (
+      requestedTab === "home" ||
+      requestedTab === "chat" ||
+      requestedTab === "stats" ||
+      requestedTab === "profile"
+    ) {
+      setActiveTab(requestedTab);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+
+    setNotificationPermission(window.Notification.permission);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !convexUser ||
+      notificationPermission !== "granted" ||
+      !publicVapidKey ||
+      pushSyncAttempted.current
+    ) {
+      return;
+    }
+
+    pushSyncAttempted.current = true;
+    void syncBrowserSubscription().catch(() => {
+      pushSyncAttempted.current = false;
+    });
+  }, [convexUser, notificationPermission, publicVapidKey]);
+
+  useEffect(() => {
+    if (!convexUser || typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.localStorage.getItem(
+      getReminderSeenKey(convexUser._id),
+    );
+    setLastSeenReminderTimestamp(stored ? Number(stored) || 0 : 0);
+  }, [convexUser]);
+
+  useEffect(() => {
+    if (!convexUser) {
+      return;
+    }
+
+    void refreshDailyMessageBudget().catch(() => undefined);
+  }, [convexUser, refreshDailyMessageBudget]);
+
+  const resolvedHabits = habits ?? [];
+  const resolvedTodayCheckIns = todayCheckIns ?? [];
+  const resolvedAllCheckIns = allCheckIns ?? [];
+  const resolvedWorkoutLogs = workoutLogs ?? [];
+  const resolvedWeeklyReports = weeklyReports ?? [];
+  const resolvedMessages = messages ?? [];
+  const resolvedMessageBudgetStatus = messageBudgetStatus ?? null;
+  const latestWeeklyReport = resolvedWeeklyReports[0] ?? null;
+  const selectedHabit =
+    resolvedHabits.find((habit) => habit._id === selectedHabitId) ?? null;
+  const reminderMessages = resolvedMessages.filter(
+    (message) => message.role === "ai" && isReminderIntent(message.intent),
+  );
+  const latestReminderTimestamp =
+    reminderMessages.length > 0
+      ? Math.max(...reminderMessages.map((message) => message.timestamp))
+      : 0;
+  const hasUnreadReminder = latestReminderTimestamp > lastSeenReminderTimestamp;
+  const notificationsEnabled =
+    notificationPermission === "granted" &&
+    (notificationStatus?.subscriptionCount ?? 0) > 0;
+  const { scheduledToday, completedToday } = getCompletionSummary(
+    resolvedTodayCheckIns,
+    resolvedHabits,
+    todayKey,
+  );
+  const weeklyStats = getWeeklyStats(resolvedAllCheckIns);
+  const freeTierLimitReached =
+    convexUser?.subscriptionTier !== "pro" && resolvedHabits.length >= 3;
+
+  useEffect(() => {
+    if (
+      activeTab !== "chat" ||
+      !convexUser ||
+      latestReminderTimestamp === 0 ||
+      typeof window === "undefined"
+    ) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      getReminderSeenKey(convexUser._id),
+      String(latestReminderTimestamp),
+    );
+    setLastSeenReminderTimestamp(latestReminderTimestamp);
+  }, [activeTab, convexUser, latestReminderTimestamp]);
+
+  useEffect(() => {
+    if (!selectedHabitId) {
+      return;
+    }
+
+    const stillExists = resolvedHabits.some(
+      (habit) => habit._id === selectedHabitId,
+    );
+    if (!stillExists) {
+      setSelectedHabitId(null);
+    }
+  }, [resolvedHabits, selectedHabitId]);
+
+  async function createHabitFromForm(form: HabitFormState) {
+    if (!convexUser) return;
+
+    await createHabit({
+      userId: convexUser._id,
+      name: form.name.trim(),
+      targetDays: form.targetDays,
+      scheduledTime: form.scheduledTime,
+      reminderTime: form.reminderTime,
+      checkInDeadline: form.checkInDeadline,
+      rules: form.rules.trim(),
+      motivation: form.motivation.trim(),
+    });
+  }
+
+  async function completeOnboarding(form: HabitFormState) {
+    if (!convexUser) return;
+
+    const habitId = await createHabit({
+      userId: convexUser._id,
+      name: form.name.trim(),
+      targetDays: form.targetDays,
+      scheduledTime: form.scheduledTime,
+      reminderTime: form.reminderTime,
+      checkInDeadline: form.checkInDeadline,
+      rules: form.rules.trim(),
+      motivation: form.motivation.trim(),
+    });
+
+    await updateProfile({
+      userId: convexUser._id,
+      aiPersonality: ONBOARDING_PERSONALITY,
+      onboardingCompleted: true,
+    });
+
+    await createMessage({
+      userId: convexUser._id,
+      habitId,
+      role: "ai",
+      content: `Locked in. ${form.name} is live now. Your reminder is ${form.reminderTime} and your deadline is ${form.checkInDeadline}. Don't make me repeat myself.`,
+      intent: "check_in",
+    });
+  }
+
+  async function logCheckInStatus(
+    habit: HabitDoc | undefined,
+    status: "completed" | "missed" | "bonus",
+    source: "dashboard_quick" | "chat",
+  ) {
+    if (!convexUser || !habit) return;
+
+    const existing = resolvedTodayCheckIns.find(
+      (entry) => entry.habitId === habit._id,
+    );
+    if (existing) return;
+
+    setPendingHabitId(habit._id);
+    try {
+      const aiResponse =
+        status === "completed"
+          ? `Logged ${habit.name}. Good. Now do it again on the next scheduled day.`
+          : `Miss recorded for ${habit.name}. That's on you, not the calendar.`;
+
+      await createCheckIn({
+        habitId: habit._id,
+        userId: convexUser._id,
+        date: todayDate,
+        status,
+        source,
+        aiResponse,
+      });
+
+      await updateHabit({
+        id: habit._id,
+        currentStreak: status === "completed" ? habit.currentStreak + 1 : 0,
+        bestStreak:
+          status === "completed"
+            ? Math.max(habit.bestStreak, habit.currentStreak + 1)
+            : habit.bestStreak,
+      });
+    } finally {
+      setPendingHabitId(null);
+    }
+  }
+
+  async function handleMarkComplete(habit: HabitDoc) {
+    await logCheckInStatus(habit, "completed", "dashboard_quick");
+  }
+
+  async function handleToggleActive(habit: HabitDoc) {
+    setPendingHabitId(habit._id);
+    try {
+      await updateHabit({ id: habit._id, isActive: !habit.isActive });
+    } finally {
+      setPendingHabitId(null);
+    }
+  }
+
+  async function handleDeleteHabit(habit: HabitDoc) {
+    setPendingHabitId(habit._id);
+    try {
+      await deleteHabit({ id: habit._id });
+      if (selectedHabitId === habit._id) {
+        setSelectedHabitId(null);
+      }
+    } finally {
+      setPendingHabitId(null);
+    }
+  }
+
+  async function handleSaveHabitDetail(
+    habit: HabitDoc,
+    form: HabitDetailFormState,
+  ) {
+    setDetailSaving(true);
+    try {
+      await updateHabit({
+        id: habit._id,
+        name: form.name.trim(),
+        targetDays: form.targetDays,
+        scheduledTime: form.scheduledTime,
+        reminderTime: form.reminderTime,
+        checkInDeadline: form.checkInDeadline,
+        rules: form.rules.trim(),
+        motivation: form.motivation.trim(),
+        isActive: form.isActive,
+        schedules: form.fridayOverrideEnabled
+          ? {
+              fri: {
+                scheduledTime: form.fridayScheduledTime,
+                reminderTime: form.fridayReminderTime,
+                checkInDeadline: form.fridayCheckInDeadline,
+              },
+            }
+          : {},
+      });
+    } finally {
+      setDetailSaving(false);
+    }
+  }
+
+  async function handleSendMessage(rawContent: string) {
+    if (!convexUser) return;
+
+    const content = rawContent.trim();
+    if (!content) return;
+
+    setChatSending(true);
+    try {
+      setChatErrorMessage(null);
+      await sendChatMessage({
+        content,
+        source: "chat_input",
+      });
+
+      setChatInput("");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to send message right now.";
+      if (message.includes("FREE_DAILY_MESSAGE_LIMIT_REACHED")) {
+        setChatErrorMessage(
+          "Daily free chat cap reached. Upgrade to Pro or wait for your local midnight reset.",
+        );
+        await refreshDailyMessageBudget().catch(() => undefined);
+        return;
+      }
+      setChatErrorMessage("Unable to send message right now.");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  async function handleQuickComplete() {
+    if (!convexUser) return;
+
+    setChatSending(true);
+    try {
+      setChatErrorMessage(null);
+      await sendChatMessage({
+        content: "Yeah, I finished today's session.",
+        source: "quick_complete",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to send message right now.";
+      if (message.includes("FREE_DAILY_MESSAGE_LIMIT_REACHED")) {
+        setChatErrorMessage(
+          "Daily free chat cap reached. Upgrade to Pro or wait for your local midnight reset.",
+        );
+        await refreshDailyMessageBudget().catch(() => undefined);
+        return;
+      }
+      setChatErrorMessage("Unable to send message right now.");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  async function handleQuickMiss() {
+    if (!convexUser) return;
+
+    setChatSending(true);
+    try {
+      setChatErrorMessage(null);
+      await sendChatMessage({
+        content: "I skipped today.",
+        source: "quick_miss",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to send message right now.";
+      if (message.includes("FREE_DAILY_MESSAGE_LIMIT_REACHED")) {
+        setChatErrorMessage(
+          "Daily free chat cap reached. Upgrade to Pro or wait for your local midnight reset.",
+        );
+        await refreshDailyMessageBudget().catch(() => undefined);
+        return;
+      }
+      setChatErrorMessage("Unable to send message right now.");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  async function handleEnableNotifications() {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window) ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window)
+    ) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+
+    setNotificationPending(true);
+    try {
+      const permission =
+        window.Notification.permission === "granted"
+          ? "granted"
+          : await window.Notification.requestPermission();
+
+      setNotificationPermission(permission);
+      if (permission !== "granted") {
+        return;
+      }
+
+      await syncBrowserSubscription();
+    } finally {
+      setNotificationPending(false);
+    }
+  }
+
+  async function handleBillingChange(nextTier: "free" | "pro") {
+    setBillingPending(nextTier);
+    try {
+      const endpoint =
+        nextTier === "pro" ? "/api/billing/upgrade" : "/api/billing/downgrade";
+
+      const response = await fetch(endpoint, { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Billing update failed");
+      }
+
+      await user?.reload();
+      await refreshDailyMessageBudget().catch(() => undefined);
+    } finally {
+      setBillingPending(null);
+    }
+  }
+
+  if (!isLoaded || convexUser === undefined || habits === undefined) {
+    return (
+      <main className="min-h-screen bg-background px-6 py-10 text-foreground">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-center rounded-2xl border border-border bg-card p-10">
+          <p className="text-sm uppercase tracking-[0.3em] text-muted-foreground">
+            Loading dashboard
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!convexUser) {
+    return (
+      <main className="min-h-screen bg-background px-6 py-10 text-foreground">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-center rounded-2xl border border-border bg-card p-10">
+          <p className="text-sm uppercase tracking-[0.3em] text-muted-foreground">
+            Syncing your account
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!convexUser.onboardingCompleted || resolvedHabits.length === 0) {
+    return (
+      <OnboardingFlow
+        userName={convexUser.firstName ?? user?.firstName ?? "you"}
+        onComplete={completeOnboarding}
+      />
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-background px-6 py-8 text-foreground">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-28">
+        <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div className="space-y-3">
+              <p className="text-xs uppercase tracking-[0.35em] text-muted-foreground">
+                Streak
+              </p>
+              <h1 className="font-mono text-4xl font-semibold tracking-tight">
+                {formatToday(today)}
+              </h1>
+              <p className="text-muted-foreground">{formatTime(today)}</p>
+            </div>
+
+            <div className="flex flex-col items-start gap-3 md:items-end">
+              <Badge className="bg-primary text-primary-foreground">
+                {convexUser.subscriptionTier.toUpperCase()}
+              </Badge>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {scheduledToday > 0
+                  ? `${completedToday}/${scheduledToday} scheduled habits logged today.`
+                  : "No target habit is scheduled today."}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {activeTab === "home" ? (
+          <HomeTab
+            habits={resolvedHabits}
+            todayKey={todayKey}
+            todayCheckIns={resolvedTodayCheckIns}
+            pendingHabitId={pendingHabitId}
+            onOpenChat={() => setActiveTab("chat")}
+            onMarkComplete={handleMarkComplete}
+            onToggleActive={handleToggleActive}
+            onDeleteHabit={handleDeleteHabit}
+            onOpenDetail={(habit) => setSelectedHabitId(habit._id)}
+            canAddHabit={!freeTierLimitReached}
+            onCreateHabit={createHabitFromForm}
+          />
+        ) : null}
+
+        {activeTab === "chat" ? (
+          <ChatTab
+            messages={resolvedMessages}
+            habits={resolvedHabits}
+            budgetStatus={resolvedMessageBudgetStatus}
+            billingPending={billingPending}
+            errorMessage={chatErrorMessage}
+            input={chatInput}
+            setInput={setChatInput}
+            sending={chatSending}
+            onSend={handleSendMessage}
+            onQuickComplete={handleQuickComplete}
+            onQuickMiss={handleQuickMiss}
+            onUpgrade={() => handleBillingChange("pro")}
+          />
+        ) : null}
+
+        {activeTab === "stats" ? (
+          <StatsTab
+            habits={resolvedHabits}
+            checkIns={resolvedAllCheckIns}
+            workoutLogs={resolvedWorkoutLogs}
+            latestReport={latestWeeklyReport}
+            referenceDate={today}
+            onOpenDetail={(habit) => setSelectedHabitId(habit._id)}
+          />
+        ) : null}
+
+        {activeTab === "profile" ? (
+          <ProfileTab
+            email={convexUser.email}
+            tier={convexUser.subscriptionTier}
+            budgetStatus={resolvedMessageBudgetStatus}
+            weeklyStats={weeklyStats}
+            habits={resolvedHabits}
+            checkIns={resolvedAllCheckIns}
+            billingPending={billingPending}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
+            notificationPending={notificationPending}
+            onEnableNotifications={handleEnableNotifications}
+            onBillingChange={handleBillingChange}
+          />
+        ) : null}
+      </div>
+
+      <HabitDetailPanel
+        key={selectedHabit?._id ?? "no-habit"}
+        open={Boolean(selectedHabit)}
+        habit={selectedHabit}
+        allCheckIns={resolvedAllCheckIns}
+        allWorkoutLogs={resolvedWorkoutLogs}
+        referenceDate={today}
+        saving={detailSaving}
+        onClose={() => setSelectedHabitId(null)}
+        onSave={handleSaveHabitDetail}
+      />
+
+      <nav className="fixed inset-x-0 bottom-0 bg-transparent px-4 py-4">
+        <AnimatedDock
+          className="w-fit"
+          items={[
+            {
+              Icon: <CalendarDays className="size-5" />,
+              label: "Home",
+              active: activeTab === "home",
+              onClick: () => setActiveTab("home"),
+            },
+            {
+              Icon: <MessageSquare className="size-5" />,
+              label: "Chat",
+              active: activeTab === "chat",
+              badge: hasUnreadReminder,
+              onClick: () => setActiveTab("chat"),
+            },
+            {
+              Icon: <ChartNoAxesColumn className="size-5" />,
+              label: "Stats",
+              active: activeTab === "stats",
+              onClick: () => setActiveTab("stats"),
+            },
+            {
+              Icon: <UserCircle2 className="size-5" />,
+              label: "Profile",
+              active: activeTab === "profile",
+              onClick: () => setActiveTab("profile"),
+            },
+          ]}
+        />
+      </nav>
+    </main>
+  );
+}
