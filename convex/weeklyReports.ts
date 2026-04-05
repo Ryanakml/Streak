@@ -1,5 +1,12 @@
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
 const missedReasonValidator = v.object({
@@ -7,13 +14,15 @@ const missedReasonValidator = v.object({
   reason: v.string(),
 });
 
-async function requireIdentity(ctx: any) {
+type AuthCtx = QueryCtx | MutationCtx;
+
+async function requireIdentity(ctx: AuthCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Unauthorized");
   return identity;
 }
 
-async function requireOwnedUser(ctx: any, userId: any) {
+async function requireOwnedUser(ctx: AuthCtx, userId: Id<"users">) {
   const identity = await requireIdentity(ctx);
   const user = await ctx.db.get(userId);
   if (!user || user.clerkId !== identity.subject) {
@@ -74,7 +83,9 @@ export const latestByUser = query({
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
 
-    return reports.sort((left, right) => right.weekStart.localeCompare(left.weekStart));
+    return reports.sort((left, right) =>
+      right.weekStart.localeCompare(left.weekStart),
+    );
   },
 });
 
@@ -211,7 +222,10 @@ export const upsertGeneratedReport = internalMutation({
     const existing = await ctx.db
       .query("weeklyReports")
       .withIndex("by_user_habit_week", (q) =>
-        q.eq("userId", args.userId).eq("habitId", args.habitId).eq("weekStart", args.weekStart),
+        q
+          .eq("userId", args.userId)
+          .eq("habitId", args.habitId)
+          .eq("weekStart", args.weekStart),
       )
       .unique();
 

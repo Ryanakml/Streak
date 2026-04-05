@@ -1,17 +1,18 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { internalMutation, mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 
 const FREE_DAILY_MESSAGE_CAP = 20;
 
-async function requireIdentity(ctx: any) {
+async function requireIdentity(ctx: MutationCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Unauthorized");
   return identity;
 }
 
 async function upsertUser(
-  ctx: any,
+  ctx: MutationCtx,
   args: {
     clerkId: string;
     email: string;
@@ -27,7 +28,7 @@ async function upsertUser(
 ) {
   const existing = await ctx.db
     .query("users")
-    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", args.clerkId))
+    .withIndex("by_clerk_id", (q) => q.eq("clerkId", args.clerkId))
     .unique();
 
   if (existing) {
@@ -70,7 +71,12 @@ function getLocalDateKey(timestamp: number, timezone: string) {
 }
 
 function getNormalizedBudgetState(
-  user: { timezone?: string; dailyMessageCount: number; lastMessageReset: number; subscriptionTier: "free" | "pro" },
+  user: {
+    timezone?: string;
+    dailyMessageCount: number;
+    lastMessageReset: number;
+    subscriptionTier: "free" | "pro";
+  },
   now: number,
 ) {
   const timezone = getTimezone(user);
@@ -95,7 +101,12 @@ function getNormalizedBudgetState(
 }
 
 function toBudgetStatus(
-  user: { timezone?: string; dailyMessageCount: number; lastMessageReset: number; subscriptionTier: "free" | "pro" },
+  user: {
+    timezone?: string;
+    dailyMessageCount: number;
+    lastMessageReset: number;
+    subscriptionTier: "free" | "pro";
+  },
   now: number,
 ) {
   const normalized = getNormalizedBudgetState(user, now);
@@ -201,8 +212,7 @@ export const updateProfile = mutation({
     await ctx.db.patch(args.userId, {
       aiPersonality: args.aiPersonality ?? user.aiPersonality,
       subscriptionTier: args.subscriptionTier ?? user.subscriptionTier,
-      onboardingCompleted:
-        args.onboardingCompleted ?? user.onboardingCompleted,
+      onboardingCompleted: args.onboardingCompleted ?? user.onboardingCompleted,
       dailyMessageCount: args.dailyMessageCount ?? user.dailyMessageCount,
       lastMessageReset: args.lastMessageReset ?? user.lastMessageReset,
       timezone: args.timezone ?? user.timezone,

@@ -1,13 +1,17 @@
 import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
-async function requireIdentity(ctx: any) {
+type AuthCtx = QueryCtx | MutationCtx;
+
+async function requireIdentity(ctx: AuthCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Unauthorized");
   return identity;
 }
 
-async function requireOwnedUser(ctx: any, userId: any) {
+async function requireOwnedUser(ctx: AuthCtx, userId: Id<"users">) {
   const identity = await requireIdentity(ctx);
   const user = await ctx.db.get(userId);
   if (!user || user.clerkId !== identity.subject) {
@@ -103,11 +107,7 @@ export const update = mutation({
   args: {
     id: v.id("checkIns"),
     status: v.optional(
-      v.union(
-        v.literal("completed"),
-        v.literal("missed"),
-        v.literal("bonus"),
-      ),
+      v.union(v.literal("completed"), v.literal("missed"), v.literal("bonus")),
     ),
     source: v.optional(
       v.union(

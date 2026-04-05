@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useSearchParams } from "next/navigation";
@@ -55,13 +55,6 @@ type CheckInDoc = Doc<"checkIns">;
 type MessageDoc = Doc<"messages">;
 type WorkoutLogDoc = Doc<"workoutLogs">;
 type WeeklyReportDoc = Doc<"weeklyReports">;
-type MessageBudgetStatus = {
-  dailyMessageCount: number;
-  dailyMessageCap: number | null;
-  remainingMessages: number | null;
-  limitReached: boolean;
-  isUnlimited: boolean;
-};
 type NotificationPermissionState = NotificationPermission | "unsupported";
 type WeekCellState = "completed" | "missed" | "bonus" | "rest" | "scheduled";
 
@@ -1113,7 +1106,7 @@ function ChatTab({
             </div>
           ) : null}
 
-          <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+          <div className="max-h-112 space-y-3 overflow-y-auto pr-1">
             {sortedMessages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border bg-background p-4 text-sm text-muted-foreground">
                 No messages yet. Start the conversation or use one of the quick
@@ -2225,15 +2218,15 @@ export function DashboardShell() {
     convexUser ? { userId: convexUser._id } : "skip",
   );
 
-  async function registerReminderWorker() {
+  const registerReminderWorker = useCallback(async () => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
       throw new Error("Service workers are not supported");
     }
 
     return await navigator.serviceWorker.register("/reminder-sw.js");
-  }
+  }, []);
 
-  async function syncBrowserSubscription() {
+  const syncBrowserSubscription = useCallback(async () => {
     if (
       !publicVapidKey ||
       typeof window === "undefined" ||
@@ -2273,7 +2266,12 @@ export function DashboardShell() {
     });
 
     return true;
-  }
+  }, [
+    convexUser,
+    publicVapidKey,
+    registerReminderWorker,
+    subscribeToNotifications,
+  ]);
 
   useEffect(() => {
     if (
@@ -2388,7 +2386,12 @@ export function DashboardShell() {
     void syncBrowserSubscription().catch(() => {
       pushSyncAttempted.current = false;
     });
-  }, [convexUser, notificationPermission, publicVapidKey]);
+  }, [
+    convexUser,
+    notificationPermission,
+    publicVapidKey,
+    syncBrowserSubscription,
+  ]);
 
   useEffect(() => {
     if (!convexUser || typeof window === "undefined") {
@@ -2409,7 +2412,7 @@ export function DashboardShell() {
     void refreshDailyMessageBudget().catch(() => undefined);
   }, [convexUser, refreshDailyMessageBudget]);
 
-  const resolvedHabits = habits ?? [];
+  const resolvedHabits = useMemo(() => habits ?? [], [habits]);
   const resolvedTodayCheckIns = todayCheckIns ?? [];
   const resolvedAllCheckIns = allCheckIns ?? [];
   const resolvedWorkoutLogs = workoutLogs ?? [];

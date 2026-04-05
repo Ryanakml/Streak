@@ -1,4 +1,6 @@
 import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
 const exerciseValidator = v.object({
@@ -10,13 +12,15 @@ const exerciseValidator = v.object({
   distance: v.optional(v.number()),
 });
 
-async function requireIdentity(ctx: any) {
+type AuthCtx = QueryCtx | MutationCtx;
+
+async function requireIdentity(ctx: AuthCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Unauthorized");
   return identity;
 }
 
-async function requireOwnedHabit(ctx: any, habitId: any) {
+async function requireOwnedHabit(ctx: AuthCtx, habitId: Id<"habits">) {
   const identity = await requireIdentity(ctx);
   const habit = await ctx.db.get(habitId);
   if (!habit) throw new Error("Habit not found");
@@ -27,7 +31,7 @@ async function requireOwnedHabit(ctx: any, habitId: any) {
   return habit;
 }
 
-async function requireOwnedUser(ctx: any, userId: any) {
+async function requireOwnedUser(ctx: AuthCtx, userId: Id<"users">) {
   const identity = await requireIdentity(ctx);
   const user = await ctx.db.get(userId);
   if (!user || user.clerkId !== identity.subject) {

@@ -4,6 +4,7 @@ import webpush from "web-push";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { action, internalAction } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -56,15 +57,17 @@ function isExpiredSubscriptionError(error: unknown) {
 }
 
 function titleDay(day: string) {
-  return {
-    mon: "Mon",
-    tue: "Tue",
-    wed: "Wed",
-    thu: "Thu",
-    fri: "Fri",
-    sat: "Sat",
-    sun: "Sun",
-  }[day] ?? day;
+  return (
+    {
+      mon: "Mon",
+      tue: "Tue",
+      wed: "Wed",
+      thu: "Thu",
+      fri: "Fri",
+      sat: "Sat",
+      sun: "Sun",
+    }[day] ?? day
+  );
 }
 
 function normalizeReason(checkIn: Doc<"checkIns">) {
@@ -72,7 +75,9 @@ function normalizeReason(checkIn: Doc<"checkIns">) {
     return checkIn.userReason.trim();
   }
 
-  return checkIn.source === "auto_deadline" ? "deadline miss" : "no reason given";
+  return checkIn.source === "auto_deadline"
+    ? "deadline miss"
+    : "no reason given";
 }
 
 function fallbackRoast(args: {
@@ -102,7 +107,9 @@ function fallbackRoast(args: {
   )}% completion. That's not momentum, that's leakage. ${reasons}`;
 }
 
-async function callGroqText(messages: Array<{ role: "system" | "user"; content: string }>) {
+async function callGroqText(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     throw new Error("Missing GROQ_API_KEY for weekly review generation");
@@ -123,7 +130,9 @@ async function callGroqText(messages: Array<{ role: "system" | "user"; content: 
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Groq request failed (${response.status}): ${body.slice(0, 400)}`);
+    throw new Error(
+      `Groq request failed (${response.status}): ${body.slice(0, 400)}`,
+    );
   }
 
   const payload = (await response.json()) as {
@@ -132,7 +141,9 @@ async function callGroqText(messages: Array<{ role: "system" | "user"; content: 
 
   const content = payload.choices?.[0]?.message?.content?.trim();
   if (!content) {
-    throw new Error("Groq weekly review response did not include message content");
+    throw new Error(
+      "Groq weekly review response did not include message content",
+    );
   }
 
   return content;
@@ -200,7 +211,7 @@ function buildChatContent(args: {
 }
 
 async function pushWeeklyReview(
-  ctx: any,
+  ctx: ActionCtx,
   args: {
     userId: Doc<"users">["_id"];
     habitId: Doc<"habits">["_id"];
@@ -211,9 +222,12 @@ async function pushWeeklyReview(
     return { pushed: 0, cleanedUp: 0 };
   }
 
-  const subscriptions = await ctx.runQuery(internal.notifications.listByUserId, {
-    userId: args.userId,
-  });
+  const subscriptions = await ctx.runQuery(
+    internal.notifications.listByUserId,
+    {
+      userId: args.userId,
+    },
+  );
 
   let pushed = 0;
   let cleanedUp = 0;
@@ -253,39 +267,52 @@ async function pushWeeklyReview(
 }
 
 async function generateReportsForUser(
-  ctx: any,
+  ctx: ActionCtx,
   args: {
     userId: Doc<"users">["_id"];
     now: number;
   },
 ) {
-  const context = (await ctx.runQuery(internal.weeklyReports.getGenerationContext, {
-    userId: args.userId,
-    weekStart: "",
-    now: args.now,
-  })) as GenerationContext;
+  const context = (await ctx.runQuery(
+    internal.weeklyReports.getGenerationContext,
+    {
+      userId: args.userId,
+      weekStart: "",
+      now: args.now,
+    },
+  )) as GenerationContext;
 
   let createdReports = 0;
   let pushed = 0;
   let cleanedUp = 0;
 
   for (const habit of context.habits) {
-    const habitCheckIns = context.weeklyCheckIns.filter((entry) => entry.habitId === habit._id);
-    const completedCheckIns = habitCheckIns.filter((entry) => entry.status === "completed");
-    const bonusCheckIns = habitCheckIns.filter((entry) => entry.status === "bonus");
+    const habitCheckIns = context.weeklyCheckIns.filter(
+      (entry) => entry.habitId === habit._id,
+    );
+    const completedCheckIns = habitCheckIns.filter(
+      (entry) => entry.status === "completed",
+    );
+    const bonusCheckIns = habitCheckIns.filter(
+      (entry) => entry.status === "bonus",
+    );
     const missedDaysReasons = habitCheckIns
       .filter((entry) => entry.status === "missed")
       .map((entry) => {
-        const dayKey = context.dayKeys.find((day) => day.dateKey === entry.date)?.day ?? "";
+        const dayKey =
+          context.dayKeys.find((day) => day.dateKey === entry.date)?.day ?? "";
         return {
           day: titleDay(dayKey),
           reason: normalizeReason(entry),
         };
       });
-    const targetCount = context.dayKeys.filter((day) => habit.targetDays.includes(day.day)).length;
+    const targetCount = context.dayKeys.filter((day) =>
+      habit.targetDays.includes(day.day),
+    ).length;
     const actualCount = completedCheckIns.length;
     const bonusCount = bonusCheckIns.length;
-    const completionRate = targetCount > 0 ? (actualCount / targetCount) * 100 : 0;
+    const completionRate =
+      targetCount > 0 ? (actualCount / targetCount) * 100 : 0;
     const aiRoast = await generateRoast({
       habit,
       targetCount,
@@ -305,19 +332,22 @@ async function generateReportsForUser(
       aiRoast,
     });
 
-    const result = await ctx.runMutation(internal.weeklyReports.upsertGeneratedReport, {
-      userId: context.user._id,
-      habitId: habit._id,
-      weekStart: context.weekStart,
-      weekEnd: context.weekEnd,
-      targetCount,
-      actualCount,
-      bonusCount,
-      completionRate,
-      aiRoast,
-      missedDaysReasons,
-      chatContent,
-    });
+    const result = await ctx.runMutation(
+      internal.weeklyReports.upsertGeneratedReport,
+      {
+        userId: context.user._id,
+        habitId: habit._id,
+        weekStart: context.weekStart,
+        weekEnd: context.weekEnd,
+        targetCount,
+        actualCount,
+        bonusCount,
+        completionRate,
+        aiRoast,
+        missedDaysReasons,
+        chatContent,
+      },
+    );
 
     if (!result.wasCreated) {
       continue;
@@ -349,7 +379,10 @@ export const processDueWeeklyReviews = internalAction({
   args: { now: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const now = args.now ?? Date.now();
-    const candidates = await ctx.runQuery(internal.weeklyReports.getGenerationCandidates, { now });
+    const candidates = await ctx.runQuery(
+      internal.weeklyReports.getGenerationCandidates,
+      { now },
+    );
 
     const results = [];
     let processedUsers = 0;

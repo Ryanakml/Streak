@@ -1,18 +1,26 @@
 import type { Id } from "./_generated/dataModel";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
-async function requireIdentity(ctx: any) {
+type AuthCtx = QueryCtx | MutationCtx;
+
+async function requireIdentity(ctx: AuthCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Unauthorized");
   return identity;
 }
 
-async function getCurrentUser(ctx: any) {
+async function getCurrentUser(ctx: AuthCtx) {
   const identity = await requireIdentity(ctx);
   const user = await ctx.db
     .query("users")
-    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+    .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
     .unique();
 
   if (!user) {
