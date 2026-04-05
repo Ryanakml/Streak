@@ -1,19 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { useRef } from "react";
-import {
-  MotionValue,
-  motion,
-  useMotionValue,
-  useSpring,
-  useTransform,
-} from "motion/react";
-
 import clsx, { type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
 import Link from "next/link";
+import { twMerge } from "tailwind-merge";
 
 const cn = (...args: ClassValue[]) => twMerge(clsx(...args));
 
@@ -34,23 +24,19 @@ export interface DockItemData {
 }
 
 export const AnimatedDock = ({ className, items }: AnimatedDockProps) => {
-  const mouseX = useMotionValue(Infinity);
-
   return (
-    <motion.div
-      onMouseMove={(e) => mouseX.set(e.pageX)}
-      onMouseLeave={() => mouseX.set(Infinity)}
+    <div
       className={cn(
-        "mx-auto flex h-16 items-end gap-4 rounded-2xl bg-secondary/50 border border-primary/10 shadow-md px-4 pb-3",
+        "mx-auto flex w-full max-w-3xl items-stretch border-2 border-black bg-card shadow-[6px_6px_0px_0px_rgba(26,24,20,1)]",
         className,
       )}
     >
       {items.map((item, index) => (
         <DockItem
           key={index}
-          mouseX={mouseX}
           active={item.active}
           badge={item.badge}
+          label={item.label}
         >
           {item.link ? (
             <Link
@@ -61,7 +47,10 @@ export const AnimatedDock = ({ className, items }: AnimatedDockProps) => {
               aria-label={item.label}
               className="flex h-full w-full grow items-center justify-center"
             >
-              {item.Icon}
+              <span className="flex items-center gap-2">
+                {item.Icon}
+                <span>{item.label}</span>
+              </span>
             </Link>
           ) : (
             <button
@@ -70,69 +59,51 @@ export const AnimatedDock = ({ className, items }: AnimatedDockProps) => {
               aria-label={item.label}
               className="flex h-full w-full grow items-center justify-center"
             >
-              {item.Icon}
+              <span className="flex items-center gap-2">
+                {item.Icon}
+                <span>{item.label}</span>
+              </span>
             </button>
           )}
         </DockItem>
       ))}
-    </motion.div>
+    </div>
   );
 };
 
 interface DockItemProps {
-  mouseX: MotionValue<number>;
   children: React.ReactNode;
   active?: boolean;
   badge?: boolean | number;
+  label: string;
 }
 
 export const DockItem = ({
-  mouseX,
   children,
   active = false,
   badge = false,
+  label,
 }: DockItemProps) => {
-  const ref = useRef<HTMLDivElement>(null);
-
-  const distance = useTransform(mouseX, (val) => {
-    const bounds = ref.current?.getBoundingClientRect() ?? { x: 0, width: 0 };
-    return val - bounds.x - bounds.width / 2;
-  });
-
-  const widthSync = useTransform(distance, [-150, 0, 150], [40, 80, 40]);
-  const width = useSpring(widthSync, {
-    mass: 0.1,
-    stiffness: 150,
-    damping: 12,
-  });
-
-  const iconScale = useTransform(width, [40, 80], [1, 1.5]);
-  const iconSpring = useSpring(iconScale, {
-    mass: 0.1,
-    stiffness: 150,
-    damping: 12,
-  });
-
   return (
-    <motion.div
-      ref={ref}
-      style={{ width }}
+    <div
       className={cn(
-        "relative flex aspect-square w-10 items-center justify-center rounded-full border",
+        "relative flex min-h-16 flex-1 items-center justify-center border-r-2 border-black last:border-r-0",
         active
-          ? "border-primary/30 bg-primary text-primary-foreground"
-          : "border-border bg-card text-foreground",
+          ? "bg-[#DF3B23] text-white"
+          : "bg-card text-foreground",
       )}
     >
-      <motion.div
-        style={{ scale: iconSpring }}
-        className="flex h-full w-full grow items-center justify-center"
+      <div
+        className="flex h-full w-full grow items-center justify-center text-[10px] font-black uppercase tracking-[0.24em]"
       >
         {children}
-      </motion.div>
+      </div>
       {badge ? (
-        <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-primary" />
+        <span
+          aria-label={`${label} has unread activity`}
+          className="absolute right-2 top-2 h-3 w-3 border border-black bg-black"
+        />
       ) : null}
-    </motion.div>
+    </div>
   );
 };
