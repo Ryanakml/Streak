@@ -139,4 +139,48 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_habit_week", ["userId", "habitId", "weekStart"]),
+
+  agentActionLogs: defineTable({
+    userId: v.id("users"),
+    messageId: v.optional(v.id("messages")),
+    intent: v.string(),
+    actionType: v.string(),
+    targetType: v.string(),
+    targetId: v.optional(v.string()),
+    status: v.union(
+      v.literal("executed"),
+      v.literal("clarification_requested"),
+      v.literal("cancelled"),
+      v.literal("no_op"),
+      v.literal("failed"),
+    ),
+    inputSummary: v.string(),
+    resultSummary: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  habitSkips: defineTable({
+    userId: v.id("users"),
+    habitId: v.id("habits"),
+    date: v.string(),
+    reason: v.optional(v.string()),
+    createdBy: v.union(v.literal("agent"), v.literal("user")),
+    createdAt: v.number(),
+  })
+    .index("by_user_date", ["userId", "date"])
+    .index("by_habit_date", ["habitId", "date"]),
+
+  agentPendingActions: defineTable({
+    userId: v.id("users"),
+    messageId: v.optional(v.id("messages")),
+    intent: v.string(),
+    actionType: v.string(),
+    targetHabitId: v.optional(v.id("habits")),
+    payload: v.any(),
+    missingFields: v.array(v.string()),
+    clarificationQuestion: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
 });

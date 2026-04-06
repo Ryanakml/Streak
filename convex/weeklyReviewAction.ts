@@ -9,6 +9,9 @@ import { api, internal } from "./_generated/api";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GEMINI_API_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models";
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 type WeeklyReason = {
   day: string;
@@ -149,6 +152,106 @@ async function callGroqText(
   return content;
 }
 
+function composeGeminiInput(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+) {
+  const systemPrompt = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n")
+    .trim();
+  const userPrompt = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n\n")
+    .trim();
+
+  return {
+    systemPrompt,
+    userPrompt,
+  };
+}
+
+async function callGeminiText(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY for weekly review generation");
+  }
+
+  const { systemPrompt, userPrompt } = composeGeminiInput(messages);
+  const response = await fetch(
+    `${GEMINI_API_URL}/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...(systemPrompt
+          ? {
+              systemInstruction: {
+                parts: [{ text: systemPrompt }],
+              },
+            }
+          : {}),
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: userPrompt }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.4,
+          responseMimeType: "text/plain",
+        },
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Gemini request failed (${response.status}): ${body.slice(0, 400)}`,
+    );
+  }
+
+  const payload = (await response.json()) as {
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{ text?: string }>;
+      };
+    }>;
+  };
+
+  const content = payload.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text ?? "")
+    .join("")
+    .trim();
+  if (!content) {
+    throw new Error(
+      "Gemini weekly review response did not include message content",
+    );
+  }
+
+  return content;
+}
+
+async function callModelText(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+) {
+  try {
+    return await callGeminiText(messages);
+  } catch (error) {
+    console.warn(
+      "Gemini weekly review call failed, falling back to Groq",
+      error,
+    );
+    return await callGroqText(messages);
+  }
+}
+
 async function generateRoast(args: {
   habit: Doc<"habits">;
   targetCount: number;
@@ -158,7 +261,7 @@ async function generateRoast(args: {
   missedDaysReasons: WeeklyReason[];
 }) {
   try {
-    const roast = await callGroqText([
+    const roast = await callModelText([
       {
         role: "system",
         content:
