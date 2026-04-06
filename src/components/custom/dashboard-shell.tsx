@@ -60,6 +60,13 @@ type WorkoutLogDoc = Doc<"workoutLogs">;
 type WeeklyReportDoc = Doc<"weeklyReports">;
 type NotificationPermissionState = NotificationPermission | "unsupported";
 type WeekCellState = "completed" | "missed" | "bonus" | "rest" | "scheduled";
+type PressureState =
+  | "rest"
+  | "upcoming"
+  | "due-soon"
+  | "deadline-risk"
+  | "logged"
+  | "missed";
 
 type HabitFormState = {
   name: string;
@@ -142,6 +149,13 @@ function formatWorkoutDate(timestamp: number) {
   }).format(new Date(timestamp));
 }
 
+function formatFullTime(timestamp: number) {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
 function formatWeekRange(weekStart: string, weekEnd: string) {
   const start = new Date(`${weekStart}T00:00:00`);
   const end = new Date(`${weekEnd}T00:00:00`);
@@ -159,6 +173,22 @@ function toDateKey(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function setTimeOnDate(referenceDate: Date, time: string) {
+  const [hours, minutes] = time.split(":").map((value) => Number(value));
+  const next = new Date(referenceDate);
+  next.setHours(hours ?? 0, minutes ?? 0, 0, 0);
+  return next;
+}
+
+function formatMinutesRemaining(minutes: number) {
+  if (minutes <= 0) return "Now";
+  if (minutes < 60) return `${minutes}m left`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (remainder === 0) return `${hours}h left`;
+  return `${hours}h ${remainder}m left`;
 }
 
 function isReminderIntent(intent: string | undefined) {
@@ -571,9 +601,7 @@ function OnboardingFlow({
     <main className="min-h-screen bg-background px-6 py-10 text-foreground">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <div className="space-y-3">
-          <p className="brutal-meta">
-            Streak Onboarding
-          </p>
+          <p className="brutal-meta">Streak Onboarding</p>
           <h1 className="text-4xl font-black uppercase tracking-[-0.08em] sm:text-6xl">
             {step === 1 && `Choose your coach, ${userName}.`}
             {step === 2 && "What habit are you building?"}
@@ -794,9 +822,7 @@ function OnboardingFlow({
                 <div className="mt-3 grid gap-2 text-sm uppercase tracking-[0.12em] text-white">
                   <p>
                     Target:{" "}
-                    <span className="font-black text-white">
-                      {form.name}
-                    </span>
+                    <span className="font-black text-white">{form.name}</span>
                   </p>
                   <p>
                     Days:{" "}
@@ -842,10 +868,767 @@ function OnboardingFlow({
   );
 }
 
+type HabitPressureSnapshot = {
+  habit: HabitDoc;
+  checkIn?: CheckInDoc;
+  scheduledToday: boolean;
+  state: PressureState;
+  priority: number;
+  nextTimeLabel: string;
+  nextTimeValue: string;
+  countdownLabel: string;
+  headline: string;
+  support: string;
+  streakLabel: string;
+  primaryActionLabel: string;
+  chatPrompt: string;
+  cardClassName: string;
+  badgeClassName: string;
+  panelClassName: string;
+  panelToneClassName: string;
+  emphasisClassName: string;
+  countdownMinutes: number | null;
+  deadlineProgress: number | null;
+  urgencyLabel: string;
+  isPrimaryCandidate: boolean;
+};
+
+function getPressurePriority(state: PressureState) {
+  if (state === "missed") return 6;
+  if (state === "deadline-risk") return 5;
+  if (state === "due-soon") return 4;
+  if (state === "upcoming") return 3;
+  if (state === "logged") return 2;
+  return 1;
+}
+
+function getHabitPressureSnapshot(
+  habit: HabitDoc,
+  todayKey: string,
+  todayDate: string,
+  todayCheckIns: CheckInDoc[],
+  referenceDate: Date,
+): HabitPressureSnapshot {
+  const checkIn = todayCheckIns.find((entry) => entry.habitId === habit._id);
+  const scheduledToday = habit.isActive && habit.targetDays.includes(todayKey);
+  const reminderDate = setTimeOnDate(referenceDate, habit.reminderTime);
+  const deadlineDate = setTimeOnDate(referenceDate, habit.checkInDeadline);
+  const minutesToReminder = Math.ceil(
+    (reminderDate.getTime() - referenceDate.getTime()) / 60000,
+  );
+  const minutesToDeadline = Math.ceil(
+    (deadlineDate.getTime() - referenceDate.getTime()) / 60000,
+  );
+  const isOverdue =
+    scheduledToday &&
+    !checkIn &&
+    minutesToDeadline <= 0 &&
+    todayDate === toDateKey(referenceDate);
+  const totalWindowMinutes = Math.max(
+    1,
+    Math.round((deadlineDate.getTime() - reminderDate.getTime()) / 60000),
+  );
+  const elapsedWindowMinutes = Math.min(
+    totalWindowMinutes,
+    Math.max(
+      0,
+      Math.round((referenceDate.getTime() - reminderDate.getTime()) / 60000),
+    ),
+  );
+  const deadlineProgress = scheduledToday
+    ? Math.min(
+        100,
+        Math.max(
+          0,
+          Math.round((elapsedWindowMinutes / totalWindowMinutes) * 100),
+        ),
+      )
+    : null;
+
+  let state: PressureState = "rest";
+  if (checkIn?.status === "missed") {
+    state = "missed";
+  } else if (checkIn?.status === "completed" || checkIn?.status === "bonus") {
+    state = "logged";
+  } else if (!scheduledToday) {
+    state = "rest";
+  } else if (isOverdue || minutesToDeadline <= 45) {
+    state = "deadline-risk";
+  } else if (minutesToReminder <= 0 || minutesToDeadline <= 120) {
+    state = "due-soon";
+  } else {
+    state = "upcoming";
+  }
+
+  const streakRisk =
+    scheduledToday &&
+    !checkIn &&
+    habit.currentStreak > 0 &&
+    (state === "due-soon" || state === "deadline-risk");
+
+  const base = {
+    nextTimeLabel: "Schedule",
+    nextTimeValue: habit.scheduledTime,
+    countdownLabel: "Later today",
+    headline: "No pressure today.",
+    support:
+      "Rest day. Recover or log a bonus session if you still put work in.",
+    streakLabel:
+      habit.currentStreak > 0
+        ? `Current streak ${habit.currentStreak} days`
+        : "No streak running",
+    primaryActionLabel: "Open chat",
+    chatPrompt: `How am I doing with ${habit.name}?`,
+    cardClassName: "bg-card text-foreground",
+    badgeClassName: "bg-background text-foreground border-black",
+    panelClassName: "border-black bg-background text-foreground",
+    panelToneClassName: "text-foreground",
+    emphasisClassName: "text-foreground",
+    countdownMinutes: null,
+    deadlineProgress: scheduledToday ? deadlineProgress : null,
+    urgencyLabel: "No active clock",
+    isPrimaryCandidate: scheduledToday || Boolean(checkIn),
+  };
+
+  if (state === "logged") {
+    return {
+      ...base,
+      habit,
+      checkIn,
+      scheduledToday,
+      state,
+      priority: getPressurePriority(state),
+      nextTimeLabel: "Logged",
+      nextTimeValue: formatFullTime(
+        checkIn?.timestamp ?? referenceDate.getTime(),
+      ),
+      countdownLabel:
+        checkIn?.status === "bonus" ? "Bonus work banked" : "Target handled",
+      headline:
+        habit.currentStreak + 1 > 1
+          ? `Chain protected. ${habit.name} is done.`
+          : `${habit.name} is on the board.`,
+      support:
+        checkIn?.status === "bonus"
+          ? "Extra work counts. Keep the standard tomorrow just as clean."
+          : "You handled today's rep. Tomorrow still expects the same standard.",
+      streakLabel:
+        habit.currentStreak > 0
+          ? `Streak rolling ${habit.currentStreak} days`
+          : "First clean log on record",
+      primaryActionLabel: "Review with coach",
+      chatPrompt: `Give me the readout for ${habit.name} after today's log.`,
+      cardClassName: "bg-black text-white",
+      badgeClassName: "bg-white text-black border-white",
+      panelClassName: "border-white/40 bg-white/10 text-white",
+      panelToneClassName: "text-white",
+      emphasisClassName: "text-white",
+      countdownMinutes: null,
+      deadlineProgress: 100,
+      urgencyLabel: "Locked in",
+      isPrimaryCandidate: true,
+    };
+  }
+
+  if (state === "missed") {
+    return {
+      ...base,
+      habit,
+      checkIn,
+      scheduledToday,
+      state,
+      priority: getPressurePriority(state),
+      nextTimeLabel: "Miss recorded",
+      nextTimeValue: checkIn
+        ? formatFullTime(checkIn.timestamp)
+        : habit.checkInDeadline,
+      countdownLabel: "Deadline lost",
+      headline: `${habit.name} slipped today.`,
+      support:
+        habit.currentStreak > 0
+          ? `That broke a ${habit.currentStreak}-day run. Write the excuse in chat, then reset for the next slot.`
+          : "You let today's slot go. Own it in chat and set up the next clean rep.",
+      streakLabel:
+        habit.bestStreak > 0
+          ? `Best streak still ${habit.bestStreak} days`
+          : "No clean run built yet",
+      primaryActionLabel: "Explain the miss",
+      chatPrompt: `I missed ${habit.name}. Help me reset the next rep.`,
+      cardClassName: "bg-[#DF3B23] text-white",
+      badgeClassName: "bg-white text-[#DF3B23] border-white",
+      panelClassName: "border-[#D8B0A8] bg-[#F5E8E0] text-[#5A160D]",
+      panelToneClassName: "text-[#5A160D]",
+      emphasisClassName: "text-[#8D220F]",
+      countdownMinutes: null,
+      deadlineProgress: 100,
+      urgencyLabel: "Window closed",
+      isPrimaryCandidate: true,
+    };
+  }
+
+  if (state === "deadline-risk") {
+    return {
+      ...base,
+      habit,
+      checkIn,
+      scheduledToday,
+      state,
+      priority: getPressurePriority(state),
+      nextTimeLabel: minutesToDeadline <= 0 ? "Past deadline" : "Deadline",
+      nextTimeValue: habit.checkInDeadline,
+      countdownLabel:
+        minutesToDeadline <= 0
+          ? "You are already late"
+          : formatMinutesRemaining(minutesToDeadline),
+      headline:
+        minutesToDeadline <= 0
+          ? `Deadline passed for ${habit.name}.`
+          : `${habit.name} is about to cost you.`,
+      support:
+        minutesToDeadline <= 0
+          ? "The slot is blown unless you own it now. Open chat and explain what happened."
+          : "Stop scanning and log the session before this turns into a miss.",
+      streakLabel: streakRisk
+        ? `Streak at risk: ${habit.currentStreak} days`
+        : base.streakLabel,
+      primaryActionLabel:
+        minutesToDeadline <= 0 ? "Own the miss" : "Log it now",
+      chatPrompt:
+        minutesToDeadline <= 0
+          ? `I am late on ${habit.name}. Help me recover the next session.`
+          : `I am close to missing ${habit.name}. Keep me focused.`,
+      cardClassName: "bg-[#F2D6D1] text-foreground",
+      badgeClassName: "bg-[#DF3B23] text-white border-[#DF3B23]",
+      panelClassName: "border-[#DF3B23] bg-white text-foreground",
+      panelToneClassName: "text-foreground",
+      emphasisClassName: "text-[#DF3B23]",
+      countdownMinutes: minutesToDeadline,
+      deadlineProgress,
+      urgencyLabel:
+        minutesToDeadline <= 0 ? "Past deadline" : "Deadline clock running",
+      isPrimaryCandidate: true,
+    };
+  }
+
+  if (state === "due-soon") {
+    return {
+      ...base,
+      habit,
+      checkIn,
+      scheduledToday,
+      state,
+      priority: getPressurePriority(state),
+      nextTimeLabel: minutesToReminder <= 0 ? "Deadline" : "Reminder",
+      nextTimeValue:
+        minutesToReminder <= 0 ? habit.checkInDeadline : habit.reminderTime,
+      countdownLabel:
+        minutesToReminder <= 0
+          ? formatMinutesRemaining(minutesToDeadline)
+          : formatMinutesRemaining(Math.max(minutesToReminder, 0)),
+      headline: `${habit.name} is live today.`,
+      support:
+        minutesToReminder <= 0
+          ? "The reminder window is already open. Finish before the deadline starts squeezing."
+          : "Your reminder window is here. Decide now before the deadline owns the day.",
+      streakLabel: streakRisk
+        ? `Streak at risk: ${habit.currentStreak} days`
+        : base.streakLabel,
+      primaryActionLabel: "Check in now",
+      chatPrompt: `Keep me on track for ${habit.name} today.`,
+      cardClassName: "bg-[#F4E9C9] text-foreground",
+      badgeClassName: "bg-black text-white border-black",
+      panelClassName: "border-black bg-white text-foreground",
+      panelToneClassName: "text-foreground",
+      emphasisClassName: "text-foreground",
+      countdownMinutes:
+        minutesToReminder <= 0 ? minutesToDeadline : minutesToReminder,
+      deadlineProgress,
+      urgencyLabel:
+        minutesToReminder <= 0
+          ? "Countdown to deadline"
+          : "Reminder window opening",
+      isPrimaryCandidate: true,
+    };
+  }
+
+  if (state === "upcoming") {
+    return {
+      ...base,
+      habit,
+      checkIn,
+      scheduledToday,
+      state,
+      priority: getPressurePriority(state),
+      nextTimeLabel: "Reminder",
+      nextTimeValue: habit.reminderTime,
+      countdownLabel: formatMinutesRemaining(Math.max(minutesToReminder, 0)),
+      headline: `${habit.name} is next up.`,
+      support:
+        "The slot is booked. Keep the day clean so you are ready when the reminder hits.",
+      streakLabel: streakRisk
+        ? `Streak at risk: ${habit.currentStreak} days`
+        : base.streakLabel,
+      primaryActionLabel: "Prep with coach",
+      chatPrompt: `Set me up to hit ${habit.name} clean today.`,
+      cardClassName: "bg-card text-foreground",
+      badgeClassName: "bg-background text-foreground border-black",
+      panelClassName: "border-black bg-background text-foreground",
+      panelToneClassName: "text-foreground",
+      emphasisClassName: "text-foreground",
+      countdownMinutes: minutesToReminder,
+      deadlineProgress,
+      urgencyLabel: "Clock not hot yet",
+      isPrimaryCandidate: true,
+    };
+  }
+
+  return {
+    ...base,
+    habit,
+    checkIn,
+    scheduledToday,
+    state,
+    priority: getPressurePriority(state),
+    panelToneClassName: "text-foreground",
+    emphasisClassName: "text-foreground",
+    countdownMinutes: null,
+    deadlineProgress: null,
+    urgencyLabel: "No active clock",
+  };
+}
+
+function rankHabitSnapshots(
+  left: HabitPressureSnapshot,
+  right: HabitPressureSnapshot,
+) {
+  if (left.priority !== right.priority) {
+    return right.priority - left.priority;
+  }
+  if (left.scheduledToday !== right.scheduledToday) {
+    return left.scheduledToday ? -1 : 1;
+  }
+  if (left.habit.currentStreak !== right.habit.currentStreak) {
+    return right.habit.currentStreak - left.habit.currentStreak;
+  }
+  return left.habit.name.localeCompare(right.habit.name);
+}
+
+function PressureBadge({
+  snapshot,
+  subtle = false,
+}: {
+  snapshot: HabitPressureSnapshot;
+  subtle?: boolean;
+}) {
+  return (
+    <span
+      className={`inline-flex border px-2 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${
+        subtle ? "border-current/40 bg-transparent" : snapshot.badgeClassName
+      }`}
+    >
+      {snapshot.state === "rest"
+        ? "Rest"
+        : snapshot.state === "upcoming"
+          ? "Up next"
+          : snapshot.state === "due-soon"
+            ? "Due soon"
+            : snapshot.state === "deadline-risk"
+              ? "Deadline risk"
+              : snapshot.state === "logged"
+                ? "Logged"
+                : "Missed"}
+    </span>
+  );
+}
+
+function CountdownMeter({
+  snapshot,
+  compact = false,
+}: {
+  snapshot: HabitPressureSnapshot;
+  compact?: boolean;
+}) {
+  if (snapshot.deadlineProgress === null) {
+    return null;
+  }
+
+  return (
+    <div className={`space-y-2 ${snapshot.panelToneClassName}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-[10px] font-black uppercase tracking-[0.24em]">
+        <span>{snapshot.urgencyLabel}</span>
+        <span className={snapshot.emphasisClassName}>
+          {snapshot.countdownMinutes === null
+            ? snapshot.countdownLabel
+            : formatMinutesRemaining(snapshot.countdownMinutes)}
+        </span>
+      </div>
+      <div
+        className={`border border-current/20 ${compact ? "h-2" : "h-3"} bg-black/5`}
+      >
+        <div
+          className={`h-full transition-all duration-500 ${
+            snapshot.state === "missed" || snapshot.state === "deadline-risk"
+              ? "bg-[#DF3B23]"
+              : snapshot.state === "logged"
+                ? "bg-black"
+                : "bg-[#B88A12]"
+          } ${snapshot.state === "missed" ? "animate-pulse" : ""}`}
+          style={{ width: `${snapshot.deadlineProgress}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SummaryStatusCard({
+  snapshot,
+  scheduledToday,
+  completedToday,
+  subscriptionTier,
+  currentTime,
+  onPrimaryAction,
+}: {
+  snapshot: HabitPressureSnapshot | null;
+  scheduledToday: number;
+  completedToday: number;
+  subscriptionTier: "free" | "pro";
+  currentTime: Date;
+  onPrimaryAction: () => void;
+}) {
+  return (
+    <div className="grid gap-6 md:grid-cols-[1.1fr_0.9fr]">
+      <div className="space-y-3">
+        <p className="brutal-meta">Streak</p>
+        <h1 className="text-5xl font-black uppercase tracking-[-0.08em] sm:text-7xl">
+          {formatToday(currentTime)}
+        </h1>
+        <p className="border-t-2 border-black pt-3 text-xl font-black uppercase tracking-[0.22em] text-muted-foreground">
+          {formatTime(currentTime)}
+        </p>
+      </div>
+
+      <div
+        className={`grid gap-4 border-2 p-5 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)] ${
+          snapshot?.panelClassName ??
+          "border-black bg-background text-foreground"
+        }`}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-current/20 pb-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {snapshot ? <PressureBadge snapshot={snapshot} /> : null}
+              <Badge className="bg-black text-white">
+                {subscriptionTier.toUpperCase()}
+              </Badge>
+            </div>
+            <p className="text-3xl font-black uppercase tracking-[-0.05em]">
+              {snapshot ? snapshot.headline : "Nothing due today."}
+            </p>
+            {snapshot ? <CountdownMeter snapshot={snapshot} compact /> : null}
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+              Daily status
+            </p>
+            <p className="mt-2 text-2xl font-black">
+              {scheduledToday > 0
+                ? `${completedToday}/${scheduledToday}`
+                : "0/0"}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+          <div className="space-y-2">
+            <p
+              className={`text-sm uppercase tracking-[0.14em] opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
+            >
+              {snapshot
+                ? `${snapshot.habit.name} · ${snapshot.countdownLabel}`
+                : "No target habit is scheduled. Use chat for bonus work or tomorrow's setup."}
+            </p>
+            <p
+              className={`text-sm uppercase tracking-[0.12em] opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
+            >
+              {snapshot?.support ??
+                "No target habit is scheduled today. Use chat to plan ahead."}
+            </p>
+            {snapshot ? (
+              <div
+                className={`flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em] ${snapshot.panelToneClassName}`}
+              >
+                <span>
+                  {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
+                </span>
+                <span>{snapshot.streakLabel}</span>
+              </div>
+            ) : null}
+          </div>
+          <Button
+            type="button"
+            variant={snapshot?.state === "logged" ? "outline" : "default"}
+            onClick={onPrimaryAction}
+          >
+            {snapshot?.primaryActionLabel ?? "Open chat"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HomeHabitCard({
+  snapshot,
+  isPrimary,
+  pendingHabitId,
+  onOpenChat,
+  onMarkComplete,
+  onToggleActive,
+  onDeleteHabit,
+  onOpenDetail,
+}: {
+  snapshot: HabitPressureSnapshot;
+  isPrimary: boolean;
+  pendingHabitId: string | null;
+  onOpenChat: () => void;
+  onMarkComplete: (habit: HabitDoc) => Promise<void>;
+  onToggleActive: (habit: HabitDoc) => Promise<void>;
+  onDeleteHabit: (habit: HabitDoc) => Promise<void>;
+  onOpenDetail: (habit: HabitDoc) => void;
+}) {
+  const { habit, checkIn, scheduledToday, state } = snapshot;
+  const canMarkComplete =
+    pendingHabitId !== habit._id &&
+    !checkIn &&
+    habit.isActive &&
+    scheduledToday &&
+    state !== "missed";
+
+  return (
+    <Card
+      className={`${snapshot.cardClassName} ${
+        isPrimary
+          ? "border-[3px] shadow-[10px_10px_0px_0px_rgba(26,24,20,1)]"
+          : scheduledToday
+            ? "opacity-100"
+            : "opacity-75"
+      }`}
+    >
+      <CardHeader className="flex flex-col gap-4 border-b-2 border-current/15 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {isPrimary ? (
+              <span className="text-[10px] font-black uppercase tracking-[0.28em] opacity-70">
+                Primary target
+              </span>
+            ) : null}
+            <PressureBadge snapshot={snapshot} subtle={!isPrimary} />
+            <Badge variant="outline">
+              {habit.isActive ? "Active" : "Paused"}
+            </Badge>
+          </div>
+          <div className="space-y-2">
+            <CardTitle className={`${isPrimary ? "text-4xl" : "text-3xl"}`}>
+              {habit.name}
+            </CardTitle>
+            <p className="text-sm uppercase tracking-[0.12em] opacity-80">
+              {snapshot.headline}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenDetail(habit)}
+          >
+            <PencilLine />
+            Details
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onToggleActive(habit)}
+            disabled={pendingHabitId === habit._id}
+          >
+            {habit.isActive ? "Pause" : "Resume"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => onDeleteHabit(habit)}
+            disabled={pendingHabitId === habit._id}
+          >
+            <Trash2 />
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent className="grid gap-6 p-6">
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className={`border-2 p-5 ${snapshot.panelClassName}`}>
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+              Today status
+            </p>
+            <p className="mt-3 text-3xl font-black uppercase tracking-[-0.05em]">
+              {state === "logged"
+                ? "Handled"
+                : state === "missed"
+                  ? "Missed"
+                  : state === "deadline-risk"
+                    ? "Move now"
+                    : state === "due-soon"
+                      ? "Window open"
+                      : state === "upcoming"
+                        ? "Queued up"
+                        : "Off the clock"}
+            </p>
+            <p className="mt-3 text-sm uppercase tracking-[0.12em] opacity-80">
+              {snapshot.support}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em]">
+              <span>
+                {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
+              </span>
+              <span>{snapshot.countdownLabel}</span>
+            </div>
+            <div className="mt-4">
+              <CountdownMeter snapshot={snapshot} />
+            </div>
+          </div>
+
+          <div className="grid border-2 border-current/20 sm:grid-cols-3">
+            <div className="border-b-2 border-r-0 border-current/20 p-4 sm:border-b-0 sm:border-r-2">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+                Reminder
+              </p>
+              <p className="mt-3 text-2xl font-black">{habit.reminderTime}</p>
+            </div>
+            <div className="border-b-2 border-r-0 border-current/20 p-4 sm:border-b-0 sm:border-r-2">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+                Deadline
+              </p>
+              <p className="mt-3 text-2xl font-black">
+                {habit.checkInDeadline}
+              </p>
+            </div>
+            <div className="p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+                Streak
+              </p>
+              <p className="mt-3 text-2xl font-black">
+                {habit.currentStreak} days
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Button
+            type="button"
+            variant={state === "logged" ? "outline" : "default"}
+            disabled={!canMarkComplete}
+            onClick={() => onMarkComplete(habit)}
+          >
+            {state === "logged"
+              ? "Already logged"
+              : state === "missed"
+                ? "Miss recorded"
+                : snapshot.primaryActionLabel}
+          </Button>
+          <Button type="button" variant="outline" onClick={onOpenChat}>
+            <MessageSquare />
+            {state === "missed" ? "Reset in chat" : "Chat with coach"}
+          </Button>
+        </div>
+
+        <div className="space-y-3 border-t-2 border-current/15 pt-5">
+          <p className="text-sm uppercase tracking-[0.12em] opacity-80">
+            <span className="mr-2 font-black text-current">Rules:</span>
+            {habit.rules}
+          </p>
+          <p className="text-sm uppercase tracking-[0.12em] opacity-80">
+            <span className="mr-2 font-black text-current">Motivation:</span>
+            {habit.motivation}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {habit.targetDays.map((day) => (
+              <Badge key={`${habit._id}-${day}`} variant="outline">
+                {toTitleDay(day)}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CoachContextRail({
+  snapshot,
+  onLoadPrompt,
+}: {
+  snapshot: HabitPressureSnapshot | null;
+  onLoadPrompt: (value: string) => void;
+}) {
+  return (
+    <div
+      className={`grid gap-3 border-2 px-4 py-4 ${
+        snapshot?.panelClassName ?? "border-black bg-secondary text-foreground"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="brutal-meta text-current">Coach context</p>
+            {snapshot ? <PressureBadge snapshot={snapshot} /> : null}
+          </div>
+          <p
+            className={`text-2xl font-black uppercase tracking-[-0.05em] ${snapshot?.panelToneClassName ?? ""}`}
+          >
+            {snapshot ? snapshot.habit.name : "No target habit today"}
+          </p>
+          <p
+            className={`text-sm uppercase tracking-[0.12em] opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
+          >
+            {snapshot?.support ??
+              "Use this space for bonus logs, planning, or review."}
+          </p>
+        </div>
+        {snapshot ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onLoadPrompt(snapshot.chatPrompt)}
+          >
+            <Sparkles />
+            Load prompt
+          </Button>
+        ) : null}
+      </div>
+      {snapshot ? (
+        <div className="space-y-3">
+          <div
+            className={`flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em] ${snapshot.panelToneClassName}`}
+          >
+            <span>
+              {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
+            </span>
+            <span>{snapshot.countdownLabel}</span>
+            <span>{snapshot.streakLabel}</span>
+          </div>
+          <CountdownMeter snapshot={snapshot} compact />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function HomeTab({
-  habits,
-  todayKey,
-  todayCheckIns,
+  snapshots,
+  primarySnapshot,
   pendingHabitId,
   onOpenChat,
   onMarkComplete,
@@ -855,9 +1638,8 @@ function HomeTab({
   canAddHabit,
   onCreateHabit,
 }: {
-  habits: HabitDoc[];
-  todayKey: string;
-  todayCheckIns: CheckInDoc[];
+  snapshots: HabitPressureSnapshot[];
+  primarySnapshot: HabitPressureSnapshot | null;
   pendingHabitId: string | null;
   onOpenChat: () => void;
   onMarkComplete: (habit: HabitDoc) => Promise<void>;
@@ -867,9 +1649,8 @@ function HomeTab({
   canAddHabit: boolean;
   onCreateHabit: (form: HabitFormState) => Promise<void>;
 }) {
-  const todayHabits = habits.filter((habit) =>
-    habit.targetDays.includes(todayKey),
-  );
+  const todayHabits = snapshots.filter((snapshot) => snapshot.scheduledToday);
+  const orderedSnapshots = [...snapshots].sort(rankHabitSnapshots);
 
   return (
     <div className="space-y-6">
@@ -893,155 +1674,33 @@ function HomeTab({
               Rest Day
             </p>
             <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
-              No target habit is scheduled today. Use the chat tab if you want
-              to log a bonus session or plan ahead.
+              No target habit is scheduled today. Use chat if you still train,
+              or clean up tomorrow before it gets loose.
             </p>
           </CardContent>
         </Card>
       ) : null}
 
-      {habits.map((habit) => {
-        const checkIn = todayCheckIns.find(
-          (entry) => entry.habitId === habit._id,
-        );
-        const scheduledToday = habit.targetDays.includes(todayKey);
-
-        return (
-          <Card
-            key={habit._id}
-            className={checkIn?.status === "missed" ? "bg-[#DF3B23] text-white" : ""}
-          >
-            <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-3">
-                <CardTitle className="text-3xl">{habit.name}</CardTitle>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline">
-                    {scheduledToday ? "Scheduled today" : "Rest day"}
-                  </Badge>
-                  <Badge variant="outline">
-                    {habit.isActive ? "Active" : "Paused"}
-                  </Badge>
-                  {checkIn ? (
-                    <Badge
-                      className={
-                        checkIn.status === "missed"
-                          ? "bg-white text-[#DF3B23]"
-                          : "bg-black text-white"
-                      }
-                    >
-                      {checkIn.status}
-                    </Badge>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onOpenDetail(habit)}
-                >
-                  <PencilLine />
-                  Details
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onToggleActive(habit)}
-                  disabled={pendingHabitId === habit._id}
-                >
-                  {habit.isActive ? "Pause" : "Resume"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => onDeleteHabit(habit)}
-                  disabled={pendingHabitId === habit._id}
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            </CardHeader>
-
-            <CardContent className="grid gap-6 lg:grid-cols-[1fr_auto]">
-              <div className="grid border-2 border-black sm:grid-cols-2 xl:grid-cols-4">
-                <div className="border-b-2 border-r-2 border-black p-4 xl:border-b-0">
-                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
-                    Schedule
-                  </p>
-                  <p className="mt-3 text-2xl font-black">{habit.scheduledTime}</p>
-                </div>
-                <div className="border-b-2 border-r-2 border-black p-4 sm:border-r-0 xl:border-r-2 xl:border-b-0">
-                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
-                    Reminder
-                  </p>
-                  <p className="mt-3 text-2xl font-black">{habit.reminderTime}</p>
-                </div>
-                <div className="border-r-2 border-black p-4">
-                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
-                    Deadline
-                  </p>
-                  <p className="mt-3 text-2xl font-black">{habit.checkInDeadline}</p>
-                </div>
-                <div className="p-4">
-                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
-                    Streak
-                  </p>
-                  <p className="mt-3 text-2xl font-black">{habit.currentStreak} days</p>
-                </div>
-              </div>
-
-              <div className="flex min-w-44 flex-col gap-3">
-                <Button
-                  type="button"
-                  variant={checkIn?.status === "missed" ? "outline" : "default"}
-                  disabled={
-                    pendingHabitId === habit._id ||
-                    !!checkIn ||
-                    !habit.isActive ||
-                    !scheduledToday
-                  }
-                  onClick={() => onMarkComplete(habit)}
-                >
-                  {checkIn?.status === "completed"
-                    ? "Already logged"
-                    : "Mark Complete"}
-                </Button>
-                <Button type="button" variant="outline" onClick={onOpenChat}>
-                  <MessageSquare />
-                  Chat With AI
-                </Button>
-              </div>
-
-              <div className="space-y-3 border-t-2 border-black pt-6 lg:col-span-2">
-                <p className={`text-sm uppercase tracking-[0.12em] ${checkIn?.status === "missed" ? "text-white" : "text-muted-foreground"}`}>
-                  <span className={`${checkIn?.status === "missed" ? "text-white" : "text-foreground"} mr-2 font-black`}>Rules:</span>
-                  {habit.rules}
-                </p>
-                <p className={`text-sm uppercase tracking-[0.12em] ${checkIn?.status === "missed" ? "text-white" : "text-muted-foreground"}`}>
-                  <span className={`${checkIn?.status === "missed" ? "text-white" : "text-foreground"} mr-2 font-black`}>Motivation:</span>
-                  {habit.motivation}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {habit.targetDays.map((day) => (
-                    <Badge key={`${habit._id}-${day}`} variant="outline">
-                      {toTitleDay(day)}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+      {orderedSnapshots.map((snapshot) => (
+        <HomeHabitCard
+          key={snapshot.habit._id}
+          snapshot={snapshot}
+          isPrimary={primarySnapshot?.habit._id === snapshot.habit._id}
+          pendingHabitId={pendingHabitId}
+          onOpenChat={onOpenChat}
+          onMarkComplete={onMarkComplete}
+          onToggleActive={onToggleActive}
+          onDeleteHabit={onDeleteHabit}
+          onOpenDetail={onOpenDetail}
+        />
+      ))}
     </div>
   );
 }
 
 function ChatTab({
   messages,
-  habits,
+  primarySnapshot,
   budgetStatus,
   billingPending,
   errorMessage,
@@ -1054,7 +1713,7 @@ function ChatTab({
   onUpgrade,
 }: {
   messages: MessageDoc[];
-  habits: HabitDoc[];
+  primarySnapshot: HabitPressureSnapshot | null;
   budgetStatus: {
     dailyMessageCount: number;
     dailyMessageCap: number | null;
@@ -1073,21 +1732,122 @@ function ChatTab({
   onUpgrade: () => Promise<void>;
 }) {
   const sortedMessages = sortByTimestamp(messages);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const limitReached = budgetStatus?.limitReached ?? false;
+  const lastMessageId = sortedMessages[sortedMessages.length - 1]?._id ?? null;
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [lastMessageId, sortedMessages.length]);
+
+  const quickActions = primarySnapshot
+    ? primarySnapshot.state === "missed"
+      ? [
+          {
+            key: "missed",
+            label: "Own the miss",
+            variant: "default" as const,
+            onClick: onQuickMiss,
+            icon: <MoonStar />,
+          },
+          {
+            key: "review",
+            label: "Reset with coach",
+            variant: "outline" as const,
+            onClick: async () => setInput(primarySnapshot.chatPrompt),
+            icon: <Sparkles />,
+          },
+          {
+            key: "done",
+            label: "Mark done",
+            variant: "outline" as const,
+            onClick: onQuickComplete,
+            icon: <Check />,
+          },
+        ]
+      : primarySnapshot.state === "logged"
+        ? [
+            {
+              key: "review",
+              label: "Review today",
+              variant: "default" as const,
+              onClick: async () => setInput(primarySnapshot.chatPrompt),
+              icon: <Sparkles />,
+            },
+            {
+              key: "done",
+              label: "Already logged",
+              variant: "outline" as const,
+              onClick: onQuickComplete,
+              icon: <Check />,
+            },
+            {
+              key: "skip",
+              label: "Record miss",
+              variant: "outline" as const,
+              onClick: onQuickMiss,
+              icon: <MoonStar />,
+            },
+          ]
+        : [
+            {
+              key: "done",
+              label:
+                primarySnapshot.state === "deadline-risk"
+                  ? "Log it now"
+                  : "Mark today done",
+              variant: "default" as const,
+              onClick: onQuickComplete,
+              icon: <Check />,
+            },
+            {
+              key: "review",
+              label:
+                primarySnapshot.state === "upcoming"
+                  ? "Prep with coach"
+                  : "Ask coach",
+              variant: "outline" as const,
+              onClick: async () => setInput(primarySnapshot.chatPrompt),
+              icon: <Sparkles />,
+            },
+            {
+              key: "skip",
+              label: "I skipped today",
+              variant: "outline" as const,
+              onClick: onQuickMiss,
+              icon: <MoonStar />,
+            },
+          ]
+    : [
+        {
+          key: "review",
+          label: "Ask coach",
+          variant: "default" as const,
+          onClick: async () => setInput("How should I use today well?"),
+          icon: <Sparkles />,
+        },
+      ];
 
   return (
     <div className="space-y-6">
       <div className="space-y-2">
         <p className="brutal-meta">Coach Log</p>
-        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">Chat</h2>
+        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
+          Chat
+        </h2>
         <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
-          Persistent conversation backed by Convex messages. This is the base
-          layer for the AI-first workflow.
+          Coach console for pressure, excuses, and readouts. Same habit state as
+          Home, but built for decisions in real time.
         </p>
       </div>
 
       <Card>
         <CardContent className="space-y-4 p-4">
+          <CoachContextRail
+            snapshot={primarySnapshot}
+            onLoadPrompt={setInput}
+          />
+
           <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-black bg-secondary px-4 py-3 text-sm uppercase tracking-[0.12em] text-muted-foreground">
             <span className="max-w-xl">
               {budgetStatus?.isUnlimited
@@ -1128,8 +1888,8 @@ function ChatTab({
           <div className="max-h-112 overflow-y-auto border-2 border-black bg-background px-4 pr-1">
             {sortedMessages.length === 0 ? (
               <div className="border-b border-dashed border-black py-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                No messages yet. Start the conversation or use one of the quick
-                actions below.
+                No messages yet. Start clean, explain the miss, or force a plan
+                before today drifts.
               </div>
             ) : null}
 
@@ -1153,40 +1913,22 @@ function ChatTab({
                 <p className="leading-7 text-foreground">{message.content}</p>
               </div>
             ))}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={sending || limitReached}
-              onClick={onQuickComplete}
-            >
-              <Check />
-              Mark today done
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={sending || limitReached}
-              onClick={onQuickMiss}
-            >
-              <MoonStar />I skipped today
-            </Button>
-            {habits.length > 0 ? (
+            {quickActions.map((action) => (
               <Button
+                key={action.key}
                 type="button"
-                variant="ghost"
-                onClick={() =>
-                  setInput(
-                    `How am I doing with ${habits[0]?.name ?? "my habit"}?`,
-                  )
-                }
+                variant={action.variant}
+                disabled={sending || limitReached}
+                onClick={() => void action.onClick()}
               >
-                <Sparkles />
-                Ask AI
+                {action.icon}
+                {action.label}
               </Button>
-            ) : null}
+            ))}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -1198,7 +1940,11 @@ function ChatTab({
               placeholder={
                 limitReached
                   ? "Daily free chat cap reached. Upgrade or wait for reset."
-                  : "Type a message to your coach..."
+                  : primarySnapshot?.state === "missed"
+                    ? "Own what happened and reset the next rep..."
+                    : primarySnapshot?.state === "deadline-risk"
+                      ? "Send the update before this gets worse..."
+                      : "Type a message to your coach..."
               }
             />
             <Button
@@ -1263,7 +2009,9 @@ function StatsTab({
     <div className="space-y-6">
       <div className="space-y-2">
         <p className="brutal-meta">Readout</p>
-        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">Stats</h2>
+        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
+          Stats
+        </h2>
         <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
           Read-only weekly performance and recent workout logs from your live
           data.
@@ -1537,9 +2285,7 @@ function HabitDetailPanel({
       <aside className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l-2 border-black bg-card p-6 shadow-[-8px_0px_0px_0px_rgba(26,24,20,1)]">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-3">
-            <p className="brutal-meta">
-              Habit Detail
-            </p>
+            <p className="brutal-meta">Habit Detail</p>
             <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
               {habit.name}
             </h2>
@@ -1788,7 +2534,9 @@ function HabitDetailPanel({
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Default scheduled
                 </p>
-                <p className="mt-2 text-2xl font-black">{habit.scheduledTime}</p>
+                <p className="mt-2 text-2xl font-black">
+                  {habit.scheduledTime}
+                </p>
               </div>
               <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
@@ -1850,7 +2598,9 @@ function HabitDetailPanel({
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Rules
                 </p>
-                <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">{habit.rules}</p>
+                <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
+                  {habit.rules}
+                </p>
               </div>
               <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
@@ -1899,7 +2649,9 @@ function HabitDetailPanel({
                     className="border-2 border-black bg-card p-4"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-sm font-black uppercase tracking-[0.18em]">{entry.date}</p>
+                      <p className="text-sm font-black uppercase tracking-[0.18em]">
+                        {entry.date}
+                      </p>
                       <div className="flex flex-wrap gap-2">
                         <Badge variant="outline">
                           {formatCheckInStatus(entry.status)}
@@ -2075,11 +2827,7 @@ function ProfileTab({
               <span>Theme mode</span>
               <span className="font-black text-foreground">{theme}</span>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onToggleTheme}
-            >
+            <Button type="button" variant="outline" onClick={onToggleTheme}>
               {theme === "dark" ? <SunMedium /> : <MonitorCog />}
               {theme === "dark" ? "Switch to Light" : "Switch to Dark"}
             </Button>
@@ -2142,7 +2890,9 @@ function ProfileTab({
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Week completed
               </p>
-              <p className="mt-2 text-3xl font-black">{weeklyStats.completed}</p>
+              <p className="mt-2 text-3xl font-black">
+                {weeklyStats.completed}
+              </p>
             </div>
             <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
@@ -2176,6 +2926,7 @@ export function DashboardShell() {
   const syncAttempted = useRef(false);
   const seededWelcome = useRef(false);
   const pushSyncAttempted = useRef(false);
+  const [now, setNow] = useState(() => new Date());
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [pendingHabitId, setPendingHabitId] = useState<string | null>(null);
   const [billingPending, setBillingPending] = useState<"free" | "pro" | null>(
@@ -2219,9 +2970,8 @@ export function DashboardShell() {
     api.users.getMessageBudgetStatus,
     convexUser ? {} : "skip",
   );
-  const today = useMemo(() => new Date(), []);
-  const todayKey = getTodayKey(today);
-  const todayDate = toDateKey(today);
+  const todayKey = getTodayKey(now);
+  const todayDate = toDateKey(now);
   const clerkTier = getClerkSubscriptionTier(user?.publicMetadata);
   const currentTimezone =
     typeof Intl !== "undefined"
@@ -2441,6 +3191,54 @@ export function DashboardShell() {
   }, [convexUser]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    let intervalId: number | null = null;
+    let timeoutId: number | null = null;
+
+    const syncNow = () => {
+      setNow(new Date());
+    };
+
+    const startMinuteTicker = () => {
+      syncNow();
+
+      const msUntilNextMinute = 60000 - (Date.now() % 60000);
+      timeoutId = window.setTimeout(() => {
+        syncNow();
+        intervalId = window.setInterval(syncNow, 60000);
+      }, msUntilNextMinute);
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        syncNow();
+      }
+    };
+
+    const handleWindowFocus = () => {
+      syncNow();
+    };
+
+    startMinuteTicker();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowFocus);
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!convexUser) {
       return;
     }
@@ -2449,11 +3247,17 @@ export function DashboardShell() {
   }, [convexUser, refreshDailyMessageBudget]);
 
   const resolvedHabits = useMemo(() => habits ?? [], [habits]);
-  const resolvedTodayCheckIns = todayCheckIns ?? [];
-  const resolvedAllCheckIns = allCheckIns ?? [];
-  const resolvedWorkoutLogs = workoutLogs ?? [];
-  const resolvedWeeklyReports = weeklyReports ?? [];
-  const resolvedMessages = messages ?? [];
+  const resolvedTodayCheckIns = useMemo(
+    () => todayCheckIns ?? [],
+    [todayCheckIns],
+  );
+  const resolvedAllCheckIns = useMemo(() => allCheckIns ?? [], [allCheckIns]);
+  const resolvedWorkoutLogs = useMemo(() => workoutLogs ?? [], [workoutLogs]);
+  const resolvedWeeklyReports = useMemo(
+    () => weeklyReports ?? [],
+    [weeklyReports],
+  );
+  const resolvedMessages = useMemo(() => messages ?? [], [messages]);
   const resolvedMessageBudgetStatus = messageBudgetStatus ?? null;
   const latestWeeklyReport = resolvedWeeklyReports[0] ?? null;
   const selectedHabit =
@@ -2474,6 +3278,23 @@ export function DashboardShell() {
     resolvedHabits,
     todayKey,
   );
+  const habitSnapshots = useMemo(
+    () =>
+      resolvedHabits.map((habit) =>
+        getHabitPressureSnapshot(
+          habit,
+          todayKey,
+          todayDate,
+          resolvedTodayCheckIns,
+          now,
+        ),
+      ),
+    [now, resolvedHabits, resolvedTodayCheckIns, todayDate, todayKey],
+  );
+  const primaryHabitSnapshot =
+    [...habitSnapshots]
+      .filter((snapshot) => snapshot.isPrimaryCandidate)
+      .sort(rankHabitSnapshots)[0] ?? null;
   const weeklyStats = getWeeklyStats(resolvedAllCheckIns);
   const freeTierLimitReached =
     convexUser?.subscriptionTier !== "pro" && resolvedHabits.length >= 3;
@@ -2822,48 +3643,20 @@ export function DashboardShell() {
     <main className="min-h-screen bg-background px-6 py-8 text-foreground">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-28">
         <section className="border-2 border-black bg-card p-6 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-8">
-          <div className="grid gap-6 md:grid-cols-[1.25fr_0.75fr]">
-            <div className="space-y-3">
-              <p className="brutal-meta">Streak</p>
-              <h1 className="text-5xl font-black uppercase tracking-[-0.08em] sm:text-7xl">
-                {formatToday(today)}
-              </h1>
-              <p className="border-t-2 border-black pt-3 text-xl font-black uppercase tracking-[0.22em] text-muted-foreground">
-                {formatTime(today)}
-              </p>
-            </div>
-
-            <div className="grid gap-4 border-2 border-black bg-background p-4">
-              <div className="flex items-center justify-between gap-4 border-b-2 border-black pb-4">
-                <span className="brutal-meta text-foreground">Tier</span>
-                <Badge className="bg-black text-white">
-                  {convexUser.subscriptionTier.toUpperCase()}
-                </Badge>
-              </div>
-              <div className="grid gap-2">
-                <span className="brutal-meta text-foreground">
-                  Daily Status
-                </span>
-                <p className="text-2xl font-black uppercase tracking-[-0.05em]">
-                  {scheduledToday > 0
-                    ? `${completedToday}/${scheduledToday} Logged`
-                    : "No Target Habit"}
-                </p>
-              </div>
-              <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                {scheduledToday > 0
-                  ? `${completedToday}/${scheduledToday} scheduled habits logged today.`
-                  : "No target habit is scheduled today."}
-              </p>
-            </div>
-          </div>
+          <SummaryStatusCard
+            snapshot={primaryHabitSnapshot}
+            scheduledToday={scheduledToday}
+            completedToday={completedToday}
+            subscriptionTier={convexUser.subscriptionTier}
+            currentTime={now}
+            onPrimaryAction={() => setActiveTab("chat")}
+          />
         </section>
 
         {activeTab === "home" ? (
           <HomeTab
-            habits={resolvedHabits}
-            todayKey={todayKey}
-            todayCheckIns={resolvedTodayCheckIns}
+            snapshots={habitSnapshots}
+            primarySnapshot={primaryHabitSnapshot}
             pendingHabitId={pendingHabitId}
             onOpenChat={() => setActiveTab("chat")}
             onMarkComplete={handleMarkComplete}
@@ -2878,7 +3671,7 @@ export function DashboardShell() {
         {activeTab === "chat" ? (
           <ChatTab
             messages={resolvedMessages}
-            habits={resolvedHabits}
+            primarySnapshot={primaryHabitSnapshot}
             budgetStatus={resolvedMessageBudgetStatus}
             billingPending={billingPending}
             errorMessage={chatErrorMessage}
@@ -2898,7 +3691,7 @@ export function DashboardShell() {
             checkIns={resolvedAllCheckIns}
             workoutLogs={resolvedWorkoutLogs}
             latestReport={latestWeeklyReport}
-            referenceDate={today}
+            referenceDate={now}
             onOpenDetail={(habit) => setSelectedHabitId(habit._id)}
           />
         ) : null}
@@ -2929,7 +3722,7 @@ export function DashboardShell() {
         habit={selectedHabit}
         allCheckIns={resolvedAllCheckIns}
         allWorkoutLogs={resolvedWorkoutLogs}
-        referenceDate={today}
+        referenceDate={now}
         saving={detailSaving}
         onClose={() => setSelectedHabitId(null)}
         onSave={handleSaveHabitDetail}

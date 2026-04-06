@@ -1,6 +1,6 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 
 const exerciseValidator = v.object({
@@ -18,6 +18,106 @@ function getDateKey(date: Date, timezone: string) {
 
 function getTodayKey(date: Date, timezone: string) {
   return formatInTimeZone(date, timezone, "EEE").toLowerCase().slice(0, 3);
+}
+
+function shiftDateKey(date: Date, timezone: string, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return getDateKey(next, timezone);
+}
+
+function compareCheckInsDesc(left: Doc<"checkIns">, right: Doc<"checkIns">) {
+  if (left.date !== right.date) {
+    return right.date.localeCompare(left.date);
+  }
+
+  return right.timestamp - left.timestamp;
+}
+
+function buildHabitSummary(args: {
+  habit: Doc<"habits">;
+  allCheckIns: Doc<"checkIns">[];
+  date: string;
+  date7dStart: string;
+  date30dStart: string;
+  todayReminders: Doc<"reminders">[];
+}) {
+  const habitCheckIns = args.allCheckIns.filter(
+    (checkIn) => checkIn.habitId === args.habit._id,
+  );
+  const sortedCheckIns = [...habitCheckIns].sort(compareCheckInsDesc);
+  const checkInsLast7d = sortedCheckIns.filter(
+    (checkIn) => checkIn.date >= args.date7dStart && checkIn.date <= args.date,
+  );
+  const checkInsLast30d = sortedCheckIns.filter(
+    (checkIn) => checkIn.date >= args.date30dStart && checkIn.date <= args.date,
+  );
+
+  const completedLast7d = checkInsLast7d.filter(
+    (checkIn) => checkIn.status === "completed",
+  ).length;
+  const missedLast7d = checkInsLast7d.filter(
+    (checkIn) => checkIn.status === "missed",
+  ).length;
+  const bonusLast7d = checkInsLast7d.filter(
+    (checkIn) => checkIn.status === "bonus",
+  ).length;
+  const completedLast30d = checkInsLast30d.filter(
+    (checkIn) => checkIn.status === "completed",
+  ).length;
+  const missedLast30d = checkInsLast30d.filter(
+    (checkIn) => checkIn.status === "missed",
+  ).length;
+  const bonusLast30d = checkInsLast30d.filter(
+    (checkIn) => checkIn.status === "bonus",
+  ).length;
+  const lastCheckIn = sortedCheckIns[0] ?? null;
+  const recentMissReasons = sortedCheckIns
+    .filter((checkIn) => checkIn.status === "missed")
+    .map(
+      (checkIn) =>
+        checkIn.userReason?.trim() ||
+        checkIn.conversationSummary?.trim() ||
+        null,
+    )
+    .filter((reason): reason is string => Boolean(reason))
+    .slice(0, 3);
+  const habitTodayReminders = args.todayReminders.filter(
+    (reminder) => reminder.habitId === args.habit._id,
+  );
+
+  return {
+    habitId: args.habit._id,
+    habitName: args.habit.name,
+    completedLast7d,
+    missedLast7d,
+    bonusLast7d,
+    completionRateLast7d:
+      checkInsLast7d.length > 0
+        ? Math.round((completedLast7d / checkInsLast7d.length) * 100)
+        : 0,
+    completedLast30d,
+    missedLast30d,
+    bonusLast30d,
+    completionRateLast30d:
+      checkInsLast30d.length > 0
+        ? Math.round((completedLast30d / checkInsLast30d.length) * 100)
+        : 0,
+    currentStreak: args.habit.currentStreak,
+    bestStreak: args.habit.bestStreak,
+    lastCheckInStatus: lastCheckIn?.status ?? null,
+    lastCheckInDate: lastCheckIn?.date ?? null,
+    recentMissReasons,
+    todayReminderStatus: {
+      hasAny: habitTodayReminders.length > 0,
+      pendingTypes: habitTodayReminders
+        .filter((reminder) => !reminder.sent)
+        .map((reminder) => reminder.type),
+      sentTypes: habitTodayReminders
+        .filter((reminder) => reminder.sent)
+        .map((reminder) => reminder.type),
+    },
+  };
 }
 
 export const getChatContext = internalQuery({
@@ -42,12 +142,19 @@ export const getChatContext = internalQuery({
 
     const activeHabits = habits.filter((habit) => habit.isActive);
     const timezone = user.timezone ?? "UTC";
-    const date = getDateKey(new Date(args.now), timezone);
+    const now = new Date(args.now);
+    const date = getDateKey(now, timezone);
+    const date7dStart = shiftDateKey(now, timezone, -6);
+    const date30dStart = shiftDateKey(now, timezone, -29);
     const todayCheckIns = await ctx.db
       .query("checkIns")
       .withIndex("by_user_date", (q) =>
         q.eq("userId", user._id).eq("date", date),
       )
+      .collect();
+    const allCheckIns = await ctx.db
+      .query("checkIns")
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
       .collect();
 
     const recentMessagesDesc = await ctx.db
@@ -62,20 +169,50 @@ export const getChatContext = internalQuery({
       .order("desc")
       .take(12);
 
+    const allReminders = await ctx.db
+      .query("reminders")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    const todayReminders = allReminders.filter((reminder) => reminder.date === date);
+
     const today = new Date(args.now);
     const todayKey = getTodayKey(today, timezone);
     const todayHabit =
       activeHabits.find((habit) => habit.targetDays.includes(todayKey)) ?? null;
     const latestMessage = recentMessagesDesc[0] ?? null;
+    const habitSummaries = activeHabits.map((habit) =>
+      buildHabitSummary({
+        habit,
+        allCheckIns,
+        date,
+        date7dStart,
+        date30dStart,
+        todayReminders,
+      }),
+    );
+    const todayReminderStatus = todayHabit
+      ? (habitSummaries.find((summary) => summary.habitId === todayHabit._id)
+          ?.todayReminderStatus ?? {
+          hasAny: false,
+          pendingTypes: [],
+          sentTypes: [],
+        })
+      : null;
 
     return {
       user,
       date,
+      todayDayKey: todayKey,
       activeHabits,
+      todayHabits: activeHabits.filter((habit) =>
+        habit.targetDays.includes(todayKey),
+      ),
       todayHabit,
       todayCheckIns,
       recentMessages: [...recentMessagesDesc].reverse(),
       recentCheckIns,
+      habitSummaries,
+      todayReminderStatus,
       pendingClarificationHabitId:
         latestMessage?.role === "ai" &&
         latestMessage.intent === "clarify_workout" &&
@@ -97,6 +234,34 @@ export const storeMessage = internalMutation({
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("messages", args);
+  },
+});
+
+export const updateStoredMessage = internalMutation({
+  args: {
+    id: v.id("messages"),
+    habitId: v.optional(v.id("habits")),
+    intent: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, {
+      habitId: args.habitId,
+      intent: args.intent,
+    });
+    return await ctx.db.get(args.id);
+  },
+});
+
+export const updateCheckInAiResponse = internalMutation({
+  args: {
+    id: v.id("checkIns"),
+    aiResponse: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, {
+      aiResponse: args.aiResponse,
+    });
+    return await ctx.db.get(args.id);
   },
 });
 

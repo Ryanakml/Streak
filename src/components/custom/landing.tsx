@@ -678,7 +678,7 @@ export function StreakHero({
   ctaDescription = "Set your habits. Let the AI hound you. Break the chain and hear about it. Every. Single. Time.",
   primaryCtaLabel = "Watch Demo",
   secondaryCtaLabel = "Start My Streak",
-  demoVideoUrl = "https://player.mux.com/YOUR_MUX_VIDEO_ID",
+  demoVideoUrl = "https://player.mux.com/tB5fsbVtlsOBZIpfCG8l0101cTlIReZpWX4drMSVRO8Lo?metadata-video-title=Rick+Astley+Never+Gonna+Give+You+Up+240p&video-title=Rick+Astley+Never+Gonna+Give+You+Up+240p",
   className,
   ...props
 }: StreakHeroProps) {

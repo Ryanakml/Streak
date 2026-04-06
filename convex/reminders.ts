@@ -72,7 +72,17 @@ function toTimestamp(dateKey: string, time: string, timezone: string) {
   return fromZonedTime(`${dateKey}T${time}:00`, timezone).getTime();
 }
 
-function buildReminderPayloads(habit: Doc<"habits">, user: Doc<"users">) {
+function shiftDateKey(date: Date, timezone: string, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return getDateKey(next, timezone);
+}
+
+function buildReminderPayloads(
+  habit: Doc<"habits">,
+  user: Doc<"users">,
+  skippedDates: Set<string>,
+) {
   const timezone = getTimezone(user);
   const now = Date.now();
   const reminders: Array<{
@@ -85,6 +95,9 @@ function buildReminderPayloads(habit: Doc<"habits">, user: Doc<"users">) {
     const anchor = addDays(new Date(now), dayOffset);
     const date = getDateKey(anchor, timezone);
     const dayKey = getDayKey(anchor, timezone);
+    if (skippedDates.has(date)) {
+      continue;
+    }
     if (!habit.targetDays.includes(dayKey)) {
       continue;
     }
@@ -111,32 +124,148 @@ function buildReminderPayloads(habit: Doc<"habits">, user: Doc<"users">) {
   return reminders;
 }
 
+function compareCheckInsDesc(left: Doc<"checkIns">, right: Doc<"checkIns">) {
+  if (left.date !== right.date) {
+    return right.date.localeCompare(left.date);
+  }
+
+  return right.timestamp - left.timestamp;
+}
+
+function summarizeMissTrend(missedLast7d: number) {
+  if (missedLast7d >= 4) {
+    return "You've been leaking this habit all week.";
+  }
+
+  if (missedLast7d >= 2) {
+    return "This habit has been wobbling lately.";
+  }
+
+  return "";
+}
+
+function summarizeStreak(currentStreak: number) {
+  if (currentStreak >= 7) {
+    return `You're on a ${currentStreak}-day streak. Don't get cute now.`;
+  }
+
+  if (currentStreak >= 3) {
+    return `You're on a ${currentStreak}-day run. Keep it clean.`;
+  }
+
+  return "";
+}
+
+function buildReminderContext(args: {
+  habit: Doc<"habits">;
+  reminder: Doc<"reminders">;
+  allCheckIns: Doc<"checkIns">[];
+  todayReminders: Doc<"reminders">[];
+  timezone: string;
+}) {
+  const habitCheckIns = args.allCheckIns
+    .filter((checkIn) => checkIn.habitId === args.habit._id)
+    .sort(compareCheckInsDesc);
+  const date7dStart = shiftDateKey(
+    new Date(args.reminder.scheduledFor),
+    args.timezone,
+    -6,
+  );
+  const checkInsLast7d = habitCheckIns.filter(
+    (checkIn) =>
+      checkIn.date >= date7dStart && checkIn.date <= args.reminder.date,
+  );
+  const missedLast7d = checkInsLast7d.filter(
+    (checkIn) => checkIn.status === "missed",
+  ).length;
+  const lastCheckIn = habitCheckIns[0] ?? null;
+  const recentMissReasons = habitCheckIns
+    .filter((checkIn) => checkIn.status === "missed")
+    .map(
+      (checkIn) =>
+        checkIn.userReason?.trim() ||
+        checkIn.conversationSummary?.trim() ||
+        null,
+    )
+    .filter((reason): reason is string => Boolean(reason))
+    .slice(0, 2);
+  const habitTodayReminders = args.todayReminders.filter(
+    (reminder) => reminder.habitId === args.habit._id,
+  );
+
+  return {
+    habitName: args.habit.name,
+    currentStreak: args.habit.currentStreak,
+    missedLast7d,
+    lastCheckInStatus: lastCheckIn?.status ?? null,
+    recentMissReasons,
+    todayReminderStatus: {
+      pendingTypes: habitTodayReminders
+        .filter((reminder) => !reminder.sent)
+        .map((reminder) => reminder.type),
+      sentTypes: habitTodayReminders
+        .filter((reminder) => reminder.sent)
+        .map((reminder) => reminder.type),
+    },
+  };
+}
+
 function buildReminderCopy(params: {
   habit: Doc<"habits">;
   type: ReminderType;
   scheduledTime: string;
   deadline: string;
+  context: ReturnType<typeof buildReminderContext>;
 }) {
+  const streakSignal = summarizeStreak(params.context.currentStreak);
+  const missSignal = summarizeMissTrend(params.context.missedLast7d);
+  const recentReason = params.context.recentMissReasons[0] ?? "";
+
   if (params.type === "pre_workout") {
+    const bodyLead =
+      streakSignal ||
+      missSignal ||
+      `${params.habit.name} is coming up. You ready or already making excuses?`;
+    const contentTail = recentReason
+      ? `Last time you used: ${recentReason}. Not again.`
+      : "Be ready before the excuses start talking.";
+
     return {
       title: "Streak",
-      body: `${params.habit.name} is coming up. You ready or already making excuses?`,
-      content: `${params.habit.name} starts at ${params.scheduledTime}. Be ready before the excuses start talking.`,
+      body: bodyLead,
+      content: `${params.habit.name} starts at ${params.scheduledTime}. ${contentTail}`,
     };
   }
 
   if (params.type === "check_in") {
+    const bodyLead =
+      params.context.lastCheckInStatus === "missed"
+        ? `${params.habit.name} is up. Don't repeat the last miss.`
+        : `It's check-in time for ${params.habit.name}. Did you do it?`;
+    const contentTail =
+      missSignal ||
+      streakSignal ||
+      "Answer clean: did you do it or are you dodging it?";
+
     return {
       title: "Streak",
-      body: `It's check-in time for ${params.habit.name}. Did you do it?`,
-      content: `It's ${params.scheduledTime}. Did you do ${params.habit.name} or are you about to dodge it?`,
+      body: bodyLead,
+      content: `It's ${params.scheduledTime}. ${contentTail}`,
     };
   }
 
+  const lateLead =
+    missSignal ||
+    streakSignal ||
+    `${params.habit.name} is past the ${params.deadline} deadline. That's an automatic miss.`;
+  const lateTail = recentReason
+    ? `Pattern says the same excuse keeps showing up: ${recentReason}.`
+    : "You let the deadline win this round.";
+
   return {
     title: "Streak",
-    body: `${params.habit.name} is past the ${params.deadline} deadline. That's an automatic miss.`,
-    content: `It's past ${params.deadline}. ${params.habit.name} is an automatic miss unless you already logged it.`,
+    body: lateLead,
+    content: `It's past ${params.deadline}. ${params.habit.name} is an automatic miss unless you already logged it. ${lateTail}`,
   };
 }
 
@@ -236,7 +365,15 @@ export const refreshForHabit = internalMutation({
       return { created: 0, deleted: pendingReminders.length };
     }
 
-    const nextReminders = buildReminderPayloads(habit, user);
+    const habitSkips = await ctx.db
+      .query("habitSkips")
+      .withIndex("by_habit_date", (q) => q.eq("habitId", args.habitId))
+      .collect();
+    const skippedDates = new Set(
+      habitSkips.map((skip) => skip.date),
+    );
+
+    const nextReminders = buildReminderPayloads(habit, user, skippedDates);
     for (const reminder of nextReminders) {
       await ctx.db.insert("reminders", {
         habitId: habit._id,
@@ -303,12 +440,18 @@ export const processReminder = internalMutation({
         q.eq("userId", reminder.userId).eq("date", reminder.date),
       )
       .collect();
+    const skip = await ctx.db
+      .query("habitSkips")
+      .withIndex("by_habit_date", (q) =>
+        q.eq("habitId", reminder.habitId).eq("date", reminder.date),
+      )
+      .unique();
 
     const existingCheckIn =
       existingCheckIns.find((entry) => entry.habitId === reminder.habitId) ??
       null;
 
-    if (existingCheckIn) {
+    if (existingCheckIn || skip) {
       await ctx.db.patch(reminder._id, { sent: true });
       return {
         shouldSendPush: false,
@@ -316,16 +459,35 @@ export const processReminder = internalMutation({
       };
     }
 
+    const timezone = getTimezone(user);
+    const allCheckIns = await ctx.db
+      .query("checkIns")
+      .withIndex("by_user_date", (q) => q.eq("userId", reminder.userId))
+      .collect();
+    const todayReminders = await ctx.db
+      .query("reminders")
+      .withIndex("by_user", (q) => q.eq("userId", reminder.userId))
+      .collect();
     const dayKey = getDayKey(
       new Date(reminder.scheduledFor),
-      getTimezone(user),
+      timezone,
     );
     const schedule = getDaySchedule(habit, dayKey);
+    const reminderContext = buildReminderContext({
+      habit,
+      reminder,
+      allCheckIns,
+      todayReminders: todayReminders.filter(
+        (entry) => entry.date === reminder.date,
+      ),
+      timezone,
+    });
     const copy = buildReminderCopy({
       habit,
       type: reminder.type,
       scheduledTime: schedule.scheduledTime,
       deadline: schedule.checkInDeadline,
+      context: reminderContext,
     });
 
     let aiContent = copy.content;

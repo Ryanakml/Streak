@@ -8,10 +8,12 @@
  * @module
  */
 
+import type * as agentActions from "../agentActions.js";
 import type * as chat from "../chat.js";
 import type * as chatAction from "../chatAction.js";
 import type * as checkIns from "../checkIns.js";
 import type * as crons from "../crons.js";
+import type * as devSeeds from "../devSeeds.js";
 import type * as habits from "../habits.js";
 import type * as messages from "../messages.js";
 import type * as notifications from "../notifications.js";
@@ -29,10 +31,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentActions: typeof agentActions;
   chat: typeof chat;
   chatAction: typeof chatAction;
   checkIns: typeof checkIns;
   crons: typeof crons;
+  devSeeds: typeof devSeeds;
   habits: typeof habits;
   messages: typeof messages;
   notifications: typeof notifications;
