@@ -1383,6 +1383,7 @@ function HomeHabitCard({
   pendingHabitId,
   onOpenChat,
   onMarkComplete,
+  onLogMiss,
   onToggleActive,
   onDeleteHabit,
   onOpenDetail,
@@ -1392,6 +1393,7 @@ function HomeHabitCard({
   pendingHabitId: string | null;
   onOpenChat: () => void;
   onMarkComplete: (habit: HabitDoc) => Promise<void>;
+  onLogMiss: (habit: HabitDoc) => Promise<void>;
   onToggleActive: (habit: HabitDoc) => Promise<void>;
   onDeleteHabit: (habit: HabitDoc) => Promise<void>;
   onOpenDetail: (habit: HabitDoc) => void;
@@ -1530,7 +1532,16 @@ function HomeHabitCard({
             type="button"
             variant={state === "logged" ? "outline" : "default"}
             disabled={!canMarkComplete}
-            onClick={() => onMarkComplete(habit)}
+            onClick={() => {
+              if (
+                state === "deadline-risk" &&
+                snapshot.countdownMinutes !== null &&
+                snapshot.countdownMinutes <= 0
+              ) {
+                return onLogMiss(habit);
+              }
+              return onMarkComplete(habit);
+            }}
           >
             {state === "logged"
               ? "Already logged"
@@ -1632,6 +1643,7 @@ function HomeTab({
   pendingHabitId,
   onOpenChat,
   onMarkComplete,
+  onLogMiss,
   onToggleActive,
   onDeleteHabit,
   onOpenDetail,
@@ -1643,6 +1655,7 @@ function HomeTab({
   pendingHabitId: string | null;
   onOpenChat: () => void;
   onMarkComplete: (habit: HabitDoc) => Promise<void>;
+  onLogMiss: (habit: HabitDoc) => Promise<void>;
   onToggleActive: (habit: HabitDoc) => Promise<void>;
   onDeleteHabit: (habit: HabitDoc) => Promise<void>;
   onOpenDetail: (habit: HabitDoc) => void;
@@ -1689,6 +1702,7 @@ function HomeTab({
           pendingHabitId={pendingHabitId}
           onOpenChat={onOpenChat}
           onMarkComplete={onMarkComplete}
+          onLogMiss={onLogMiss}
           onToggleActive={onToggleActive}
           onDeleteHabit={onDeleteHabit}
           onOpenDetail={onOpenDetail}
@@ -3418,6 +3432,10 @@ export function DashboardShell() {
     await logCheckInStatus(habit, "completed", "dashboard_quick");
   }
 
+  async function handleLogMiss(habit: HabitDoc) {
+    await logCheckInStatus(habit, "missed", "dashboard_quick");
+  }
+
   async function handleToggleActive(habit: HabitDoc) {
     setPendingHabitId(habit._id);
     try {
@@ -3660,6 +3678,7 @@ export function DashboardShell() {
             pendingHabitId={pendingHabitId}
             onOpenChat={() => setActiveTab("chat")}
             onMarkComplete={handleMarkComplete}
+            onLogMiss={handleLogMiss}
             onToggleActive={handleToggleActive}
             onDeleteHabit={handleDeleteHabit}
             onOpenDetail={(habit) => setSelectedHabitId(habit._id)}
