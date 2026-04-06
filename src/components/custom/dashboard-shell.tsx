@@ -12,9 +12,11 @@ import {
   Check,
   MessageSquare,
   MoonStar,
+  MonitorCog,
   PencilLine,
   Plus,
   Sparkles,
+  SunMedium,
   Trash2,
   UserCircle2,
   X,
@@ -36,6 +38,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AnimatedDock } from "@/components/ui/animated-dock";
+import { useTheme } from "@/components/custom/theme-provider";
 
 const DAYS = [
   { key: "mon", label: "Mon" },
@@ -308,7 +311,7 @@ function WeekGrid({
   referenceDate: Date;
 }) {
   return (
-    <div className="grid grid-cols-7 gap-2">
+    <div className="grid grid-cols-2 border-2 border-black sm:grid-cols-4 lg:grid-cols-7">
       {weekDays.map((day) => {
         const state = getWeeklyCellState(
           habit,
@@ -330,27 +333,35 @@ function WeekGrid({
         return (
           <div
             key={`${habit._id}-${day.dateKey}`}
-            className="space-y-2 rounded-xl border border-border bg-background p-3 text-center"
+            className={`border-b-2 border-r-2 border-black p-3 text-left lg:last:border-r-0 ${
+              state === "missed"
+                ? "bg-[#DF3B23] text-white"
+                : state === "completed"
+                  ? "bg-black text-white"
+                  : state === "bonus"
+                    ? "bg-secondary text-foreground"
+                    : "bg-background text-foreground"
+            }`}
           >
-            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-              {day.label}
-            </p>
-            <div
-              className={`mx-auto flex h-10 w-10 items-center justify-center rounded-full border text-xs font-mono ${
-                state === "completed"
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : state === "missed"
-                    ? "border-destructive/40 bg-destructive/10 text-foreground"
-                    : state === "bonus"
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : state === "scheduled"
-                        ? "border-border bg-card text-foreground"
-                        : "border-border bg-card text-muted-foreground"
+            <p
+              className={`text-[10px] font-black uppercase tracking-[0.24em] ${
+                state === "missed" || state === "completed"
+                  ? "text-white/80"
+                  : "text-muted-foreground"
               }`}
             >
+              {day.label}
+            </p>
+            <div className="mt-3 inline-flex border-2 border-current px-2 py-1 text-[10px] font-black uppercase tracking-[0.18em]">
               {label}
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p
+              className={`mt-4 text-xs uppercase tracking-[0.12em] ${
+                state === "missed" || state === "completed"
+                  ? "text-white"
+                  : "text-muted-foreground"
+              }`}
+            >
               {formatWorkoutDate(day.date.getTime())}
             </p>
           </div>
@@ -390,12 +401,12 @@ function HabitComposerDialog({
           New Habit
         </Button>
       </DialogTrigger>
-      <DialogContent className="border-border bg-card text-card-foreground sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="font-mono text-2xl">Create Habit</DialogTitle>
+          <DialogTitle className="text-3xl">Create Habit</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Add another live habit. Limits stay enforced from your Convex user
-            state.
+            Add another live habit. Limits are still enforced by your Convex
+            user state.
           </DialogDescription>
         </DialogHeader>
 
@@ -420,7 +431,7 @@ function HabitComposerDialog({
                 return (
                   <label
                     key={day.key}
-                    className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-sm"
+                    className="flex items-center gap-3 border-2 border-black bg-background px-3 py-3 text-sm uppercase"
                   >
                     <Checkbox
                       checked={checked}
@@ -560,46 +571,42 @@ function OnboardingFlow({
     <main className="min-h-screen bg-background px-6 py-10 text-foreground">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <div className="space-y-3">
-          <p className="text-sm uppercase tracking-[0.35em] text-muted-foreground">
+          <p className="brutal-meta">
             Streak Onboarding
           </p>
-          <h1 className="font-mono text-4xl font-semibold tracking-tight">
+          <h1 className="text-4xl font-black uppercase tracking-[-0.08em] sm:text-6xl">
             {step === 1 && `Choose your coach, ${userName}.`}
             {step === 2 && "What habit are you building?"}
             {step === 3 && "Lock the first habit in."}
           </h1>
-          <p className="max-w-2xl text-muted-foreground">
+          <p className="max-w-2xl text-sm uppercase tracking-[0.12em] text-muted-foreground">
             This is the product flow foundation. Once onboarding is complete,
             the Home, Chat, and Profile tabs run from the same saved habit data.
           </p>
         </div>
 
         {step === 1 ? (
-          <Card className="border-border bg-card text-card-foreground">
+          <Card>
             <CardHeader>
-              <CardTitle className="font-mono text-2xl">
-                Choose Your Coach
-              </CardTitle>
+              <CardTitle className="text-3xl">Choose Your Coach</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4">
-              <div className="rounded-xl border border-primary bg-primary/10 p-6">
+              <div className="brutal-alert p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-3">
-                    <p className="font-mono text-2xl font-semibold">
+                    <p className="text-2xl font-black uppercase tracking-[-0.05em]">
                       Brutal Mode
                     </p>
-                    <p className="text-muted-foreground">
+                    <p className="text-sm uppercase tracking-[0.12em] text-white/90">
                       No excuses. No fake encouragement. Just direct pressure
                       and consistency.
                     </p>
                   </div>
-                  <Badge className="bg-primary text-primary-foreground">
-                    Default
-                  </Badge>
+                  <Badge className="bg-white text-black">Default</Badge>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-dashed border-border p-6 text-muted-foreground">
+              <div className="border-2 border-dashed border-black bg-background p-6 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                 Coach Mode and other personalities can layer on later. Right now
                 the app ships with the brutal coach only, exactly like your
                 spec.
@@ -615,9 +622,9 @@ function OnboardingFlow({
         ) : null}
 
         {step === 2 ? (
-          <Card className="border-border bg-card text-card-foreground">
+          <Card>
             <CardHeader>
-              <CardTitle className="font-mono text-2xl">First Habit</CardTitle>
+              <CardTitle className="text-3xl">First Habit</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-5">
               <div className="grid gap-2">
@@ -635,7 +642,7 @@ function OnboardingFlow({
                 />
               </div>
 
-              <div className="grid gap-2 text-sm text-muted-foreground">
+              <div className="grid gap-2 border-2 border-black bg-secondary p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                 <p>Examples:</p>
                 <p>Go to gym 4x/week</p>
                 <p>No phone before 9am</p>
@@ -663,16 +670,14 @@ function OnboardingFlow({
         ) : null}
 
         {step === 3 ? (
-          <Card className="border-border bg-card text-card-foreground">
+          <Card>
             <CardHeader>
-              <CardTitle className="font-mono text-2xl">
-                AI Clarification
-              </CardTitle>
+              <CardTitle className="text-3xl">AI Clarification</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-6">
-              <div className="rounded-xl border border-border bg-background p-4 text-sm text-muted-foreground">
+              <div className="border-2 border-black bg-secondary p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                 Alright, so you want to build{" "}
-                <span className="font-mono text-foreground">{form.name}</span>.
+                <span className="font-black text-foreground">{form.name}</span>.
                 Lock down the days, timing, what counts, and why this actually
                 matters.
               </div>
@@ -685,7 +690,7 @@ function OnboardingFlow({
                     return (
                       <label
                         key={day.key}
-                        className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-sm"
+                        className="flex items-center gap-3 border-2 border-black bg-background px-3 py-3 text-sm uppercase"
                       >
                         <Checkbox
                           checked={checked}
@@ -782,26 +787,26 @@ function OnboardingFlow({
                 />
               </div>
 
-              <div className="rounded-xl border border-primary bg-primary/10 p-4">
-                <p className="font-mono text-sm uppercase tracking-[0.25em] text-primary">
+              <div className="brutal-alert p-4">
+                <p className="text-sm font-black uppercase tracking-[0.25em] text-white">
                   Confirmation
                 </p>
-                <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
+                <div className="mt-3 grid gap-2 text-sm uppercase tracking-[0.12em] text-white">
                   <p>
                     Target:{" "}
-                    <span className="font-mono text-foreground">
+                    <span className="font-black text-white">
                       {form.name}
                     </span>
                   </p>
                   <p>
                     Days:{" "}
-                    <span className="font-mono text-foreground">
+                    <span className="font-black text-white">
                       {form.targetDays.map(toTitleDay).join(" / ")}
                     </span>
                   </p>
                   <p>
                     Schedule:{" "}
-                    <span className="font-mono text-foreground">
+                    <span className="font-black text-white">
                       {form.scheduledTime} with reminder at {form.reminderTime}
                     </span>
                   </p>
@@ -868,10 +873,13 @@ function HomeTab({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 border-b-2 border-black pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="font-mono text-2xl font-semibold">Home</h2>
-          <p className="text-sm text-muted-foreground">
+          <p className="brutal-meta">Dashboard</p>
+          <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
+            Home
+          </h2>
+          <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
             Quick actions, current streaks, and today&apos;s targets.
           </p>
         </div>
@@ -879,10 +887,12 @@ function HomeTab({
       </div>
 
       {todayHabits.length === 0 ? (
-        <Card className="border-border bg-card">
+        <Card className="bg-secondary">
           <CardContent className="flex flex-col gap-3 p-6">
-            <p className="font-mono text-lg">Rest day.</p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-2xl font-black uppercase tracking-[-0.05em]">
+              Rest Day
+            </p>
+            <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
               No target habit is scheduled today. Use the chat tab if you want
               to log a bonus session or plan ahead.
             </p>
@@ -897,12 +907,13 @@ function HomeTab({
         const scheduledToday = habit.targetDays.includes(todayKey);
 
         return (
-          <Card key={habit._id} className="border-border bg-card">
+          <Card
+            key={habit._id}
+            className={checkIn?.status === "missed" ? "bg-[#DF3B23] text-white" : ""}
+          >
             <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-3">
-                <CardTitle className="font-mono text-2xl">
-                  {habit.name}
-                </CardTitle>
+                <CardTitle className="text-3xl">{habit.name}</CardTitle>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline">
                     {scheduledToday ? "Scheduled today" : "Rest day"}
@@ -911,7 +922,13 @@ function HomeTab({
                     {habit.isActive ? "Active" : "Paused"}
                   </Badge>
                   {checkIn ? (
-                    <Badge className="bg-primary text-primary-foreground">
+                    <Badge
+                      className={
+                        checkIn.status === "missed"
+                          ? "bg-white text-[#DF3B23]"
+                          : "bg-black text-white"
+                      }
+                    >
                       {checkIn.status}
                     </Badge>
                   ) : null}
@@ -948,36 +965,37 @@ function HomeTab({
             </CardHeader>
 
             <CardContent className="grid gap-6 lg:grid-cols-[1fr_auto]">
-              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="space-y-2">
-                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+              <div className="grid border-2 border-black sm:grid-cols-2 xl:grid-cols-4">
+                <div className="border-b-2 border-r-2 border-black p-4 xl:border-b-0">
+                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
                     Schedule
                   </p>
-                  <p className="font-mono">{habit.scheduledTime}</p>
+                  <p className="mt-3 text-2xl font-black">{habit.scheduledTime}</p>
                 </div>
-                <div className="space-y-2">
-                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                <div className="border-b-2 border-r-2 border-black p-4 sm:border-r-0 xl:border-r-2 xl:border-b-0">
+                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
                     Reminder
                   </p>
-                  <p className="font-mono">{habit.reminderTime}</p>
+                  <p className="mt-3 text-2xl font-black">{habit.reminderTime}</p>
                 </div>
-                <div className="space-y-2">
-                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                <div className="border-r-2 border-black p-4">
+                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
                     Deadline
                   </p>
-                  <p className="font-mono">{habit.checkInDeadline}</p>
+                  <p className="mt-3 text-2xl font-black">{habit.checkInDeadline}</p>
                 </div>
-                <div className="space-y-2">
-                  <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                <div className="p-4">
+                  <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${checkIn?.status === "missed" ? "text-white/80" : "text-muted-foreground"}`}>
                     Streak
                   </p>
-                  <p className="font-mono">{habit.currentStreak} days</p>
+                  <p className="mt-3 text-2xl font-black">{habit.currentStreak} days</p>
                 </div>
               </div>
 
               <div className="flex min-w-44 flex-col gap-3">
                 <Button
                   type="button"
+                  variant={checkIn?.status === "missed" ? "outline" : "default"}
                   disabled={
                     pendingHabitId === habit._id ||
                     !!checkIn ||
@@ -996,13 +1014,13 @@ function HomeTab({
                 </Button>
               </div>
 
-              <div className="space-y-3 lg:col-span-2">
-                <p className="text-sm text-muted-foreground">
-                  <span className="font-mono text-foreground">Rules:</span>{" "}
+              <div className="space-y-3 border-t-2 border-black pt-6 lg:col-span-2">
+                <p className={`text-sm uppercase tracking-[0.12em] ${checkIn?.status === "missed" ? "text-white" : "text-muted-foreground"}`}>
+                  <span className={`${checkIn?.status === "missed" ? "text-white" : "text-foreground"} mr-2 font-black`}>Rules:</span>
                   {habit.rules}
                 </p>
-                <p className="text-sm text-muted-foreground">
-                  <span className="font-mono text-foreground">Motivation:</span>{" "}
+                <p className={`text-sm uppercase tracking-[0.12em] ${checkIn?.status === "missed" ? "text-white" : "text-muted-foreground"}`}>
+                  <span className={`${checkIn?.status === "missed" ? "text-white" : "text-foreground"} mr-2 font-black`}>Motivation:</span>
                   {habit.motivation}
                 </p>
                 <div className="flex flex-wrap gap-2">
@@ -1060,22 +1078,23 @@ function ChatTab({
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h2 className="font-mono text-2xl font-semibold">Chat</h2>
-        <p className="text-sm text-muted-foreground">
+        <p className="brutal-meta">Coach Log</p>
+        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">Chat</h2>
+        <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
           Persistent conversation backed by Convex messages. This is the base
           layer for the AI-first workflow.
         </p>
       </div>
 
-      <Card className="border-border bg-card">
+      <Card>
         <CardContent className="space-y-4 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 text-sm text-muted-foreground">
-            <span>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-black bg-secondary px-4 py-3 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+            <span className="max-w-xl">
               {budgetStatus?.isUnlimited
                 ? "Pro tier: unlimited daily coach messages."
                 : `Daily budget: ${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
             </span>
-            <span className="font-mono text-foreground">
+            <span className="text-lg font-black text-foreground">
               {budgetStatus?.isUnlimited
                 ? "Unlimited"
                 : `${budgetStatus?.remainingMessages ?? 20} left`}
@@ -1083,8 +1102,8 @@ function ChatTab({
           </div>
 
           {limitReached ? (
-            <div className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm">
-              <p className="text-foreground">
+            <div className="brutal-alert flex flex-col gap-3 p-4 text-sm uppercase tracking-[0.12em]">
+              <p className="text-white">
                 You burned through today&apos;s free chat budget. Read-only
                 still works. Upgrade if you want more messages right now.
               </p>
@@ -1101,14 +1120,14 @@ function ChatTab({
           ) : null}
 
           {errorMessage ? (
-            <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground">
+            <div className="brutal-alert p-4 text-sm uppercase tracking-[0.12em]">
               {errorMessage}
             </div>
           ) : null}
 
-          <div className="max-h-112 space-y-3 overflow-y-auto pr-1">
+          <div className="max-h-112 overflow-y-auto border-2 border-black bg-background px-4 pr-1">
             {sortedMessages.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border bg-background p-4 text-sm text-muted-foreground">
+              <div className="border-b border-dashed border-black py-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                 No messages yet. Start the conversation or use one of the quick
                 actions below.
               </div>
@@ -1117,17 +1136,21 @@ function ChatTab({
             {sortedMessages.map((message) => (
               <div
                 key={message._id}
-                className={`max-w-[85%] rounded-xl border px-4 py-3 text-sm ${
-                  message.role === "ai"
-                    ? "border-primary/40 bg-primary/10 text-foreground"
-                    : "ml-auto border-border bg-background text-foreground"
-                }`}
+                className="border-b border-dashed border-black py-4 text-sm"
               >
-                <div className="mb-1 flex items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                  <span>{message.role === "ai" ? "Coach" : "You"}</span>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                  <span
+                    className={
+                      message.role === "ai"
+                        ? "border border-black bg-black px-1 py-0.5 text-white"
+                        : "border border-black px-1 py-0.5 text-black"
+                    }
+                  >
+                    {message.role === "ai" ? "Coach" : "You"}
+                  </span>
                   <span>{formatMessageTime(message.timestamp)}</span>
                 </div>
-                <p className="leading-6">{message.content}</p>
+                <p className="leading-7 text-foreground">{message.content}</p>
               </div>
             ))}
           </div>
@@ -1239,76 +1262,75 @@ function StatsTab({
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h2 className="font-mono text-2xl font-semibold">Stats</h2>
-        <p className="text-sm text-muted-foreground">
+        <p className="brutal-meta">Readout</p>
+        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">Stats</h2>
+        <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
           Read-only weekly performance and recent workout logs from your live
           data.
         </p>
       </div>
 
-      <Card className="border-border bg-card">
+      <Card>
         <CardHeader>
-          <CardTitle className="font-mono text-xl">This Week</CardTitle>
+          <CardTitle className="text-2xl">This Week</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-xl border border-border bg-background p-4">
+          <div className="border-2 border-black bg-background p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
               Active habits
             </p>
-            <p className="mt-2 font-mono text-3xl">{activeHabits.length}</p>
+            <p className="mt-2 text-3xl font-black">{activeHabits.length}</p>
           </div>
-          <div className="rounded-xl border border-border bg-background p-4">
+          <div className="border-2 border-black bg-background p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
               Completed
             </p>
-            <p className="mt-2 font-mono text-3xl">
+            <p className="mt-2 text-3xl font-black">
               {
                 weeklyCheckIns.filter((entry) => entry.status === "completed")
                   .length
               }
             </p>
           </div>
-          <div className="rounded-xl border border-border bg-background p-4">
+          <div className="border-2 border-black bg-background p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
               Missed
             </p>
-            <p className="mt-2 font-mono text-3xl">
+            <p className="mt-2 text-3xl font-black">
               {
                 weeklyCheckIns.filter((entry) => entry.status === "missed")
                   .length
               }
             </p>
           </div>
-          <div className="rounded-xl border border-border bg-background p-4">
+          <div className="border-2 border-black bg-background p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
               Bonus
             </p>
-            <p className="mt-2 font-mono text-3xl">
+            <p className="mt-2 text-3xl font-black">
               {
                 weeklyCheckIns.filter((entry) => entry.status === "bonus")
                   .length
               }
             </p>
           </div>
-          <div className="rounded-xl border border-border bg-background p-4">
+          <div className="border-2 border-black bg-background p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
               Best streak
             </p>
-            <p className="mt-2 font-mono text-3xl">{bestStreak}</p>
+            <p className="mt-2 text-3xl font-black">{bestStreak}</p>
           </div>
         </CardContent>
       </Card>
 
       {latestReport ? (
-        <Card className="border-primary/30 bg-card">
+        <Card className="bg-secondary">
           <CardHeader>
-            <CardTitle className="font-mono text-xl">
-              Latest Weekly Review
-            </CardTitle>
+            <CardTitle className="text-2xl">Latest Weekly Review</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge className="bg-primary text-primary-foreground">
+              <Badge className="bg-black text-white">
                 {habits.find((habit) => habit._id === latestReport.habitId)
                   ?.name ?? "Habit review"}
               </Badge>
@@ -1327,7 +1349,7 @@ function StatsTab({
               {latestReport.aiRoast}
             </p>
             {latestReport.missedDaysReasons.length > 0 ? (
-              <div className="rounded-xl border border-border bg-background p-4 text-sm text-muted-foreground">
+              <div className="border-2 border-black bg-background p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                 {latestReport.missedDaysReasons
                   .slice(0, 3)
                   .map((entry) => `${entry.day}: ${entry.reason}`)
@@ -1351,16 +1373,14 @@ function StatsTab({
         const recentLogs = getRecentLogsForHabit(habit._id);
 
         return (
-          <Card key={habit._id} className="border-border bg-card">
+          <Card key={habit._id}>
             <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-2">
-                <CardTitle className="font-mono text-2xl">
-                  {habit.name}
-                </CardTitle>
+                <CardTitle className="text-3xl">{habit.name}</CardTitle>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline">Streak {habit.currentStreak}</Badge>
                   <Badge variant="outline">Best {habit.bestStreak}</Badge>
-                  <Badge className="bg-primary text-primary-foreground">
+                  <Badge className="bg-black text-white">
                     {completedCount}/{targetCount} this week
                   </Badge>
                 </div>
@@ -1392,7 +1412,7 @@ function StatsTab({
                   </p>
                 </div>
                 {recentLogs.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-border bg-background p-4 text-sm text-muted-foreground">
+                  <div className="border-2 border-dashed border-black bg-background p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                     No workout logs yet for this habit.
                   </div>
                 ) : (
@@ -1404,10 +1424,10 @@ function StatsTab({
                       return (
                         <div
                           key={log._id}
-                          className="rounded-xl border border-border bg-background p-4"
+                          className="border-2 border-black bg-background p-4"
                         >
                           <div className="flex items-center justify-between gap-4">
-                            <p className="font-mono text-sm">
+                            <p className="text-sm font-black uppercase tracking-[0.18em]">
                               {checkIn
                                 ? formatWorkoutDate(checkIn.timestamp)
                                 : "Unknown date"}
@@ -1510,17 +1530,19 @@ function HabitDetailPanel({
     <div className="fixed inset-0 z-50">
       <button
         type="button"
-        className="absolute inset-0 bg-background/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-[rgba(26,24,20,0.82)]"
         onClick={onClose}
         aria-label="Close habit detail"
       />
-      <aside className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l border-border bg-card p-6 shadow-2xl">
+      <aside className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l-2 border-black bg-card p-6 shadow-[-8px_0px_0px_0px_rgba(26,24,20,1)]">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-3">
-            <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            <p className="brutal-meta">
               Habit Detail
             </p>
-            <h2 className="font-mono text-3xl font-semibold">{habit.name}</h2>
+            <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
+              {habit.name}
+            </h2>
             <div className="flex flex-wrap gap-2">
               <Badge variant="outline">
                 {habit.isActive ? "Active" : "Paused"}
@@ -1551,9 +1573,9 @@ function HabitDetailPanel({
 
         <div className="mt-6 grid gap-6">
           {isEditing ? (
-            <Card className="border-border bg-background">
+            <Card className="bg-background">
               <CardHeader>
-                <CardTitle className="font-mono text-xl">Edit Habit</CardTitle>
+                <CardTitle className="text-2xl">Edit Habit</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-5">
                 <div className="grid gap-2">
@@ -1573,7 +1595,7 @@ function HabitDetailPanel({
                       return (
                         <label
                           key={day.key}
-                          className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 text-sm"
+                          className="flex items-center gap-3 border-2 border-black bg-card px-3 py-3 text-sm uppercase"
                         >
                           <Checkbox
                             checked={checked}
@@ -1654,7 +1676,7 @@ function HabitDetailPanel({
                   />
                 </div>
 
-                <label className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm">
+                <label className="flex items-center gap-3 border-2 border-black bg-card px-4 py-3 text-sm uppercase">
                   <Checkbox
                     checked={form.isActive}
                     onCheckedChange={(value) =>
@@ -1664,14 +1686,12 @@ function HabitDetailPanel({
                   <span>{form.isActive ? "Habit active" : "Habit paused"}</span>
                 </label>
 
-                <Card className="border-border bg-card">
+                <Card>
                   <CardHeader>
-                    <CardTitle className="font-mono text-lg">
-                      Friday Override
-                    </CardTitle>
+                    <CardTitle className="text-xl">Friday Override</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-4">
-                    <label className="flex items-center gap-3 rounded-lg border border-border bg-background px-4 py-3 text-sm">
+                    <label className="flex items-center gap-3 border-2 border-black bg-background px-4 py-3 text-sm uppercase">
                       <Checkbox
                         checked={form.fridayOverrideEnabled}
                         onCheckedChange={(value) =>
@@ -1759,32 +1779,32 @@ function HabitDetailPanel({
             </Card>
           ) : null}
 
-          <Card className="border-border bg-background">
+          <Card className="bg-background">
             <CardHeader>
-              <CardTitle className="font-mono text-xl">Schedule</CardTitle>
+              <CardTitle className="text-2xl">Schedule</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-3">
-              <div className="rounded-xl border border-border bg-card p-4">
+              <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Default scheduled
                 </p>
-                <p className="mt-2 font-mono text-xl">{habit.scheduledTime}</p>
+                <p className="mt-2 text-2xl font-black">{habit.scheduledTime}</p>
               </div>
-              <div className="rounded-xl border border-border bg-card p-4">
+              <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Default reminder
                 </p>
-                <p className="mt-2 font-mono text-xl">{habit.reminderTime}</p>
+                <p className="mt-2 text-2xl font-black">{habit.reminderTime}</p>
               </div>
-              <div className="rounded-xl border border-border bg-card p-4">
+              <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Default deadline
                 </p>
-                <p className="mt-2 font-mono text-xl">
+                <p className="mt-2 text-2xl font-black">
                   {habit.checkInDeadline}
                 </p>
               </div>
-              <div className="sm:col-span-3 rounded-xl border border-border bg-card p-4">
+              <div className="sm:col-span-3 border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Target days
                 </p>
@@ -1796,19 +1816,19 @@ function HabitDetailPanel({
                   ))}
                 </div>
               </div>
-              <div className="sm:col-span-3 rounded-xl border border-border bg-card p-4">
+              <div className="sm:col-span-3 border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Friday override
                 </p>
                 {habit.schedules?.fri ? (
                   <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    <p className="font-mono">
+                    <p className="text-lg font-black">
                       {habit.schedules.fri.scheduledTime}
                     </p>
-                    <p className="font-mono">
+                    <p className="text-lg font-black">
                       {habit.schedules.fri.reminderTime}
                     </p>
-                    <p className="font-mono">
+                    <p className="text-lg font-black">
                       {habit.schedules.fri.checkInDeadline}
                     </p>
                   </div>
@@ -1821,29 +1841,27 @@ function HabitDetailPanel({
             </CardContent>
           </Card>
 
-          <Card className="border-border bg-background">
+          <Card className="bg-background">
             <CardHeader>
-              <CardTitle className="font-mono text-xl">
-                Rules and Motivation
-              </CardTitle>
+              <CardTitle className="text-2xl">Rules and Motivation</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4">
-              <div className="rounded-xl border border-border bg-card p-4">
+              <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Rules
                 </p>
-                <p className="mt-2 text-sm text-foreground">{habit.rules}</p>
+                <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">{habit.rules}</p>
               </div>
-              <div className="rounded-xl border border-border bg-card p-4">
+              <div className="border-2 border-black bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                   Motivation
                 </p>
-                <p className="mt-2 text-sm text-foreground">
+                <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
                   {habit.motivation}
                 </p>
               </div>
               {!habit.isActive ? (
-                <div className="rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm text-foreground">
+                <div className="brutal-alert p-4 text-sm uppercase tracking-[0.12em]">
                   This habit is paused. History stays intact, but reminders and
                   active scheduling are off until you resume it.
                 </div>
@@ -1851,9 +1869,9 @@ function HabitDetailPanel({
             </CardContent>
           </Card>
 
-          <Card className="border-border bg-background">
+          <Card className="bg-background">
             <CardHeader>
-              <CardTitle className="font-mono text-xl">This Week</CardTitle>
+              <CardTitle className="text-2xl">This Week</CardTitle>
             </CardHeader>
             <CardContent>
               <WeekGrid
@@ -1865,25 +1883,23 @@ function HabitDetailPanel({
             </CardContent>
           </Card>
 
-          <Card className="border-border bg-background">
+          <Card className="bg-background">
             <CardHeader>
-              <CardTitle className="font-mono text-xl">
-                Recent History
-              </CardTitle>
+              <CardTitle className="text-2xl">Recent History</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3">
               {recentHistory.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
+                <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                   No check-ins yet for this habit.
                 </div>
               ) : (
                 recentHistory.map((entry) => (
                   <div
                     key={entry._id}
-                    className="rounded-xl border border-border bg-card p-4"
+                    className="border-2 border-black bg-card p-4"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="font-mono text-sm">{entry.date}</p>
+                      <p className="text-sm font-black uppercase tracking-[0.18em]">{entry.date}</p>
                       <div className="flex flex-wrap gap-2">
                         <Badge variant="outline">
                           {formatCheckInStatus(entry.status)}
@@ -1892,12 +1908,12 @@ function HabitDetailPanel({
                       </div>
                     </div>
                     {entry.userReason ? (
-                      <p className="mt-3 text-sm text-muted-foreground">
+                      <p className="mt-3 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                         Reason: {entry.userReason}
                       </p>
                     ) : null}
                     {entry.conversationSummary ? (
-                      <p className="mt-2 text-sm text-muted-foreground">
+                      <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                         {entry.conversationSummary}
                       </p>
                     ) : null}
@@ -1907,15 +1923,13 @@ function HabitDetailPanel({
             </CardContent>
           </Card>
 
-          <Card className="border-border bg-background">
+          <Card className="bg-background">
             <CardHeader>
-              <CardTitle className="font-mono text-xl">
-                Recent Workout Logs
-              </CardTitle>
+              <CardTitle className="text-2xl">Recent Workout Logs</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3">
               {recentLogs.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
+                <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                   No workout logs yet for this habit.
                 </div>
               ) : (
@@ -1926,10 +1940,10 @@ function HabitDetailPanel({
                   return (
                     <div
                       key={log._id}
-                      className="rounded-xl border border-border bg-card p-4"
+                      className="border-2 border-black bg-card p-4"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="font-mono text-sm">
+                        <p className="text-sm font-black uppercase tracking-[0.18em]">
                           {checkIn
                             ? formatWorkoutDate(checkIn.timestamp)
                             : "Unknown date"}
@@ -1940,11 +1954,11 @@ function HabitDetailPanel({
                           </Badge>
                         ) : null}
                       </div>
-                      <p className="mt-2 text-sm text-foreground">
+                      <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
                         {formatExerciseSummary(log)}
                       </p>
                       {log.notes ? (
-                        <p className="mt-2 text-sm text-muted-foreground">
+                        <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
                           {log.notes}
                         </p>
                       ) : null}
@@ -1973,6 +1987,8 @@ function ProfileTab({
   notificationPending,
   onEnableNotifications,
   onBillingChange,
+  theme,
+  onToggleTheme,
 }: {
   email: string;
   tier: "free" | "pro";
@@ -1992,53 +2008,60 @@ function ProfileTab({
   notificationPending: boolean;
   onEnableNotifications: () => Promise<void>;
   onBillingChange: (tier: "free" | "pro") => Promise<void>;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
 }) {
   const bestStreak = Math.max(0, ...habits.map((habit) => habit.bestStreak));
 
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h2 className="font-mono text-2xl font-semibold">Profile</h2>
-        <p className="text-sm text-muted-foreground">
+        <p className="brutal-meta">Account File</p>
+        <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
+          Profile
+        </h2>
+        <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
           Account controls, plan state, and the current progress readout.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-        <Card className="border-border bg-card">
+        <Card>
           <CardHeader className="flex flex-row items-start justify-between">
             <div className="space-y-2">
-              <CardTitle className="font-mono text-xl">Account</CardTitle>
-              <p className="text-sm text-muted-foreground">{email}</p>
+              <CardTitle className="text-2xl">Account</CardTitle>
+              <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
+                {email}
+              </p>
             </div>
             <UserButton />
           </CardHeader>
           <CardContent className="space-y-4 text-sm text-muted-foreground">
-            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
               <span>Current tier</span>
-              <Badge className="bg-primary text-primary-foreground">
+              <Badge className="bg-black text-white">
                 {tier.toUpperCase()}
               </Badge>
             </div>
-            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
               <span>Daily messages used</span>
-              <span className="font-mono text-foreground">
+              <span className="font-black text-foreground">
                 {budgetStatus?.isUnlimited
                   ? "Unlimited"
                   : `${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
               </span>
             </div>
-            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
               <span>Messages remaining</span>
-              <span className="font-mono text-foreground">
+              <span className="font-black text-foreground">
                 {budgetStatus?.isUnlimited
                   ? "Unlimited"
                   : (budgetStatus?.remainingMessages ?? 20)}
               </span>
             </div>
-            <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
+            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
               <span>Reminder notifications</span>
-              <span className="font-mono text-foreground">
+              <span className="font-black text-foreground">
                 {notificationPermission === "unsupported"
                   ? "Unsupported"
                   : notificationsEnabled
@@ -2048,6 +2071,18 @@ function ProfileTab({
                       : "Disabled"}
               </span>
             </div>
+            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
+              <span>Theme mode</span>
+              <span className="font-black text-foreground">{theme}</span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onToggleTheme}
+            >
+              {theme === "dark" ? <SunMedium /> : <MonitorCog />}
+              {theme === "dark" ? "Switch to Light" : "Switch to Dark"}
+            </Button>
             <div className="flex gap-2">
               <Button
                 type="button"
@@ -2084,48 +2119,48 @@ function ProfileTab({
           </CardContent>
         </Card>
 
-        <Card className="border-border bg-card">
+        <Card>
           <CardHeader>
-            <CardTitle className="font-mono text-xl">Stats Readout</CardTitle>
+            <CardTitle className="text-2xl">Stats Readout</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Active habits
               </p>
-              <p className="mt-2 font-mono text-3xl">
+              <p className="mt-2 text-3xl font-black">
                 {habits.filter((habit) => habit.isActive).length}
               </p>
             </div>
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Best streak
               </p>
-              <p className="mt-2 font-mono text-3xl">{bestStreak}</p>
+              <p className="mt-2 text-3xl font-black">{bestStreak}</p>
             </div>
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Week completed
               </p>
-              <p className="mt-2 font-mono text-3xl">{weeklyStats.completed}</p>
+              <p className="mt-2 text-3xl font-black">{weeklyStats.completed}</p>
             </div>
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Week missed
               </p>
-              <p className="mt-2 font-mono text-3xl">{weeklyStats.missed}</p>
+              <p className="mt-2 text-3xl font-black">{weeklyStats.missed}</p>
             </div>
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Bonus sessions
               </p>
-              <p className="mt-2 font-mono text-3xl">{weeklyStats.bonus}</p>
+              <p className="mt-2 text-3xl font-black">{weeklyStats.bonus}</p>
             </div>
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="border-2 border-black bg-background p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
                 Total logs
               </p>
-              <p className="mt-2 font-mono text-3xl">{checkIns.length}</p>
+              <p className="mt-2 text-3xl font-black">{checkIns.length}</p>
             </div>
           </CardContent>
         </Card>
@@ -2136,6 +2171,7 @@ function ProfileTab({
 
 export function DashboardShell() {
   const { user, isLoaded } = useUser();
+  const { theme, toggleTheme } = useTheme();
   const searchParams = useSearchParams();
   const syncAttempted = useRef(false);
   const seededWelcome = useRef(false);
@@ -2752,7 +2788,7 @@ export function DashboardShell() {
   if (!isLoaded || convexUser === undefined || habits === undefined) {
     return (
       <main className="min-h-screen bg-background px-6 py-10 text-foreground">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-center rounded-2xl border border-border bg-card p-10">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-center border-2 border-black bg-card p-10 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)]">
           <p className="text-sm uppercase tracking-[0.3em] text-muted-foreground">
             Loading dashboard
           </p>
@@ -2764,7 +2800,7 @@ export function DashboardShell() {
   if (!convexUser) {
     return (
       <main className="min-h-screen bg-background px-6 py-10 text-foreground">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-center rounded-2xl border border-border bg-card p-10">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-center border-2 border-black bg-card p-10 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)]">
           <p className="text-sm uppercase tracking-[0.3em] text-muted-foreground">
             Syncing your account
           </p>
@@ -2785,23 +2821,36 @@ export function DashboardShell() {
   return (
     <main className="min-h-screen bg-background px-6 py-8 text-foreground">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-28">
-        <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+        <section className="border-2 border-black bg-card p-6 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-8">
+          <div className="grid gap-6 md:grid-cols-[1.25fr_0.75fr]">
             <div className="space-y-3">
-              <p className="text-xs uppercase tracking-[0.35em] text-muted-foreground">
-                Streak
-              </p>
-              <h1 className="font-mono text-4xl font-semibold tracking-tight">
+              <p className="brutal-meta">Streak</p>
+              <h1 className="text-5xl font-black uppercase tracking-[-0.08em] sm:text-7xl">
                 {formatToday(today)}
               </h1>
-              <p className="text-muted-foreground">{formatTime(today)}</p>
+              <p className="border-t-2 border-black pt-3 text-xl font-black uppercase tracking-[0.22em] text-muted-foreground">
+                {formatTime(today)}
+              </p>
             </div>
 
-            <div className="flex flex-col items-start gap-3 md:items-end">
-              <Badge className="bg-primary text-primary-foreground">
-                {convexUser.subscriptionTier.toUpperCase()}
-              </Badge>
-              <p className="max-w-md text-sm text-muted-foreground">
+            <div className="grid gap-4 border-2 border-black bg-background p-4">
+              <div className="flex items-center justify-between gap-4 border-b-2 border-black pb-4">
+                <span className="brutal-meta text-foreground">Tier</span>
+                <Badge className="bg-black text-white">
+                  {convexUser.subscriptionTier.toUpperCase()}
+                </Badge>
+              </div>
+              <div className="grid gap-2">
+                <span className="brutal-meta text-foreground">
+                  Daily Status
+                </span>
+                <p className="text-2xl font-black uppercase tracking-[-0.05em]">
+                  {scheduledToday > 0
+                    ? `${completedToday}/${scheduledToday} Logged`
+                    : "No Target Habit"}
+                </p>
+              </div>
+              <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
                 {scheduledToday > 0
                   ? `${completedToday}/${scheduledToday} scheduled habits logged today.`
                   : "No target habit is scheduled today."}
@@ -2868,6 +2917,8 @@ export function DashboardShell() {
             notificationPending={notificationPending}
             onEnableNotifications={handleEnableNotifications}
             onBillingChange={handleBillingChange}
+            theme={theme}
+            onToggleTheme={toggleTheme}
           />
         ) : null}
       </div>
@@ -2886,7 +2937,7 @@ export function DashboardShell() {
 
       <nav className="fixed inset-x-0 bottom-0 bg-transparent px-4 py-4">
         <AnimatedDock
-          className="w-fit"
+          className="max-w-4xl"
           items={[
             {
               Icon: <CalendarDays className="size-5" />,
