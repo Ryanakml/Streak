@@ -9,6 +9,7 @@ export default defineSchema({
     lastName: v.optional(v.string()),
     timezone: v.optional(v.string()),
     aiPersonality: v.literal("brutal"),
+    aiDisabled: v.optional(v.boolean()),
     subscriptionTier: v.union(v.literal("free"), v.literal("pro")),
     onboardingCompleted: v.boolean(),
     dailyMessageCount: v.number(),

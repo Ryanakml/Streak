@@ -20,6 +20,7 @@ async function upsertUser(
     lastName?: string;
     timezone?: string;
     aiPersonality?: "brutal";
+    aiDisabled?: boolean;
     subscriptionTier?: "free" | "pro";
     onboardingCompleted?: boolean;
     dailyMessageCount?: number;
@@ -39,6 +40,7 @@ async function upsertUser(
       lastName: args.lastName ?? existing.lastName,
       timezone: args.timezone ?? existing.timezone,
       aiPersonality: args.aiPersonality ?? existing.aiPersonality,
+      aiDisabled: args.aiDisabled ?? existing.aiDisabled ?? false,
       subscriptionTier: args.subscriptionTier ?? existing.subscriptionTier,
       onboardingCompleted:
         args.onboardingCompleted ?? existing.onboardingCompleted,
@@ -55,6 +57,7 @@ async function upsertUser(
     lastName: args.lastName,
     timezone: args.timezone,
     aiPersonality: args.aiPersonality ?? "brutal",
+    aiDisabled: args.aiDisabled ?? false,
     subscriptionTier: args.subscriptionTier ?? "free",
     onboardingCompleted: args.onboardingCompleted ?? false,
     dailyMessageCount: args.dailyMessageCount ?? 0,
@@ -175,6 +178,7 @@ export const syncUser = mutation({
     lastName: v.optional(v.string()),
     timezone: v.optional(v.string()),
     aiPersonality: v.optional(v.literal("brutal")),
+    aiDisabled: v.optional(v.boolean()),
     subscriptionTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     onboardingCompleted: v.optional(v.boolean()),
     dailyMessageCount: v.optional(v.number()),
@@ -193,6 +197,7 @@ export const updateProfile = mutation({
   args: {
     userId: v.id("users"),
     aiPersonality: v.optional(v.literal("brutal")),
+    aiDisabled: v.optional(v.boolean()),
     subscriptionTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     onboardingCompleted: v.optional(v.boolean()),
     dailyMessageCount: v.optional(v.number()),
@@ -211,6 +216,7 @@ export const updateProfile = mutation({
 
     await ctx.db.patch(args.userId, {
       aiPersonality: args.aiPersonality ?? user.aiPersonality,
+      aiDisabled: args.aiDisabled ?? user.aiDisabled ?? false,
       subscriptionTier: args.subscriptionTier ?? user.subscriptionTier,
       onboardingCompleted: args.onboardingCompleted ?? user.onboardingCompleted,
       dailyMessageCount: args.dailyMessageCount ?? user.dailyMessageCount,

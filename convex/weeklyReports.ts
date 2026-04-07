@@ -126,6 +126,10 @@ export const getGenerationCandidates = internalQuery({
     const candidates = [];
 
     for (const user of users) {
+      if (user.aiDisabled) {
+        continue;
+      }
+
       const timezone = getTimezone(user);
       const zonedNow = toZonedTime(args.now, timezone);
       const isSunday = zonedNow.getDay() === 0;
