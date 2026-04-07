@@ -1,12 +1,47 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 type ReminderType = "pre_workout" | "check_in" | "late_follow_up";
 type CheckInStatus = "completed" | "missed" | "bonus";
+type ReminderRunState = Doc<"reminderRuns">["state"];
+type PlannerItemStatus =
+  | "pending"
+  | "completed"
+  | "missed"
+  | "bonus"
+  | "skipped"
+  | "rescheduled"
+  | "done"
+  | "cancelled";
+type PlannerItem = {
+  itemType: "habit" | "task";
+  itemId: string;
+  title: string;
+  scheduledTime: string | null;
+  status: PlannerItemStatus;
+  riskNote: string;
+  conflictWith: string[];
+  itemDate: string;
+};
+type RiskScanItem = {
+  itemType: "habit" | "task";
+  title: string;
+  date: string;
+  scheduledTime: string | null;
+  reason: string;
+  suggestion: string;
+  score: number;
+};
+type RescheduleSuggestionItem = {
+  title: string;
+  currentTime: string | null;
+  suggestedTime: string | null;
+  reason: string;
+};
 
 const exerciseInputValidator = v.object({
   name: v.string(),
@@ -87,14 +122,48 @@ function getScheduleForDay(habit: Doc<"habits">, dayKey: string) {
   };
 }
 
+function isHabitScheduledOnDay(habit: Doc<"habits">, dayKey: string) {
+  return habit.targetDays.includes(dayKey);
+}
+
+function isHabitRelevantForDate(args: {
+  habit: Doc<"habits">;
+  dayKey: string;
+  checkIn: Doc<"checkIns"> | null;
+  skip: Doc<"habitSkips"> | null;
+  reminderRun: Doc<"reminderRuns"> | null;
+  reminders: Doc<"reminders">[];
+}) {
+  return (
+    isHabitScheduledOnDay(args.habit, args.dayKey) ||
+    Boolean(args.checkIn) ||
+    Boolean(args.skip) ||
+    Boolean(args.reminderRun) ||
+    args.reminders.length > 0
+  );
+}
+
 function buildRiskNote(args: {
   currentStreak: number;
   missedLast7d: number;
   completedLast7d: number;
   skipExists: boolean;
+  reminderRunState?: ReminderRunState | null;
 }) {
   if (args.skipExists) {
     return "intentionally skipped";
+  }
+
+  if (args.reminderRunState === "user_hesitant") {
+    return "already showing resistance";
+  }
+
+  if (args.reminderRunState === "ignored_once") {
+    return "already ignored once";
+  }
+
+  if (args.reminderRunState === "rescheduled") {
+    return "recently rescheduled";
   }
 
   if (args.currentStreak >= 3) {
@@ -110,6 +179,331 @@ function buildRiskNote(args: {
   }
 
   return "normal priority";
+}
+
+function compareTasksDesc(
+  left: Pick<Doc<"agentTasks">, "date" | "_creationTime">,
+  right: Pick<Doc<"agentTasks">, "date" | "_creationTime">,
+) {
+  if (left.date !== right.date) {
+    return right.date.localeCompare(left.date);
+  }
+
+  return right._creationTime - left._creationTime;
+}
+
+function comparePlannerItems(left: PlannerItem, right: PlannerItem) {
+  if (left.scheduledTime && right.scheduledTime) {
+    const delta = timeToMinutes(left.scheduledTime) - timeToMinutes(right.scheduledTime);
+    if (delta !== 0) {
+      return delta;
+    }
+  } else if (left.scheduledTime) {
+    return -1;
+  } else if (right.scheduledTime) {
+    return 1;
+  }
+
+  return left.title.localeCompare(right.title);
+}
+
+function getTaskRiskNote(task: Pick<Doc<"agentTasks">, "status" | "time">) {
+  if (task.status === "done") {
+    return "already done";
+  }
+
+  if (task.status === "cancelled") {
+    return "cancelled";
+  }
+
+  if (!task.time) {
+    return "needs a real time slot";
+  }
+
+  return "pending task";
+}
+
+function findConflictMap(items: PlannerItem[]) {
+  const conflictMap = new Map<string, string[]>();
+  const timedPendingItems = items.filter(
+    (item) => item.scheduledTime && item.status === "pending",
+  );
+
+  for (let index = 0; index < timedPendingItems.length; index += 1) {
+    const current = timedPendingItems[index];
+    const currentMinutes = timeToMinutes(current.scheduledTime!);
+
+    for (let nextIndex = index + 1; nextIndex < timedPendingItems.length; nextIndex += 1) {
+      const next = timedPendingItems[nextIndex];
+      const nextMinutes = timeToMinutes(next.scheduledTime!);
+
+      if (nextMinutes - currentMinutes > 60) {
+        break;
+      }
+
+      const currentConflicts = conflictMap.get(current.itemId) ?? [];
+      currentConflicts.push(next.title);
+      conflictMap.set(current.itemId, currentConflicts);
+
+      const nextConflicts = conflictMap.get(next.itemId) ?? [];
+      nextConflicts.push(current.title);
+      conflictMap.set(next.itemId, nextConflicts);
+    }
+  }
+
+  return conflictMap;
+}
+
+function applyConflictHints(items: PlannerItem[]) {
+  const conflictMap = findConflictMap(items);
+
+  return items.map((item) => ({
+    ...item,
+    conflictWith: conflictMap.get(item.itemId) ?? [],
+  }));
+}
+
+function buildConflictReason(item: PlannerItem) {
+  if (item.conflictWith.length === 0) {
+    return null;
+  }
+
+  return `conflicts with ${item.conflictWith[0]}`;
+}
+
+function buildSuggestionTime(time: string | null, offsetMinutes: number) {
+  if (!time) {
+    return null;
+  }
+
+  return minutesToTime(timeToMinutes(time) + offsetMinutes);
+}
+
+function rankRiskScore(args: {
+  item: PlannerItem;
+  today: string;
+  tomorrow: string;
+}) {
+  let score = 0;
+
+  if (args.item.itemDate === args.today) {
+    score += 4;
+  } else if (args.item.itemDate === args.tomorrow) {
+    score += 3;
+  }
+
+  if (args.item.status === "pending") {
+    score += 2;
+  }
+
+  if (
+    args.item.riskNote.includes("slipping") ||
+    args.item.riskNote.includes("ignored") ||
+    args.item.riskNote.includes("resistance")
+  ) {
+    score += 2;
+  }
+
+  if (args.item.conflictWith.length > 0) {
+    score += 2;
+  }
+
+  if (args.item.itemType === "task" && !args.item.scheduledTime) {
+    score += 1;
+  }
+
+  return score;
+}
+
+async function loadPlannerState(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+) {
+  const user = await ctx.db.get(userId);
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  const [
+    activeHabits,
+    allCheckIns,
+    allReminders,
+    allSkips,
+    allReminderRuns,
+    allTasks,
+  ] = await Promise.all([
+    ctx.db
+      .query("habits")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect(),
+    ctx.db
+      .query("checkIns")
+      .withIndex("by_user_date", (q) => q.eq("userId", userId))
+      .collect(),
+    ctx.db
+      .query("reminders")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect(),
+    ctx.db
+      .query("habitSkips")
+      .withIndex("by_user_date", (q) => q.eq("userId", userId))
+      .collect(),
+    ctx.db
+      .query("reminderRuns")
+      .withIndex("by_user_date", (q) => q.eq("userId", userId))
+      .collect(),
+    ctx.db
+      .query("agentTasks")
+      .withIndex("by_user_date", (q) => q.eq("userId", userId))
+      .collect(),
+  ]);
+
+  return {
+    user,
+    timezone: getTimezone(user),
+    habits: (activeHabits as Doc<"habits">[]).filter((habit) => habit.isActive),
+    checkIns: allCheckIns as Doc<"checkIns">[],
+    reminders: allReminders as Doc<"reminders">[],
+    skips: allSkips as Doc<"habitSkips">[],
+    reminderRuns: allReminderRuns as Doc<"reminderRuns">[],
+    tasks: (allTasks as Doc<"agentTasks">[]).sort(compareTasksDesc),
+  };
+}
+
+function buildPlanForDate(args: {
+  state: Awaited<ReturnType<typeof loadPlannerState>>;
+  date: string;
+  now: number;
+}) {
+  const planDate = new Date(`${args.date}T12:00:00.000Z`);
+  const dayKey = getDayKey(planDate, args.state.timezone);
+  const date7dStart = shiftDateKey(args.date, -6);
+  const todayDate = getDateKey(new Date(args.now), args.state.timezone);
+  const checkInsForDate = args.state.checkIns.filter((entry) => entry.date === args.date);
+  const remindersForDate = args.state.reminders.filter((entry) => entry.date === args.date);
+  const skipsForDate = args.state.skips.filter((entry) => entry.date === args.date);
+  const reminderRunsForDate = args.state.reminderRuns.filter(
+    (entry) => entry.date === args.date,
+  );
+
+  const habitItems = args.state.habits
+    .map((habit) => {
+      const schedule = getScheduleForDay(habit, dayKey);
+      const checkIn =
+        checkInsForDate.find((entry) => entry.habitId === habit._id) ?? null;
+      const skip =
+        skipsForDate.find((entry) => entry.habitId === habit._id) ?? null;
+      const reminders = remindersForDate.filter(
+        (entry) => entry.habitId === habit._id,
+      );
+      const reminderRun =
+        reminderRunsForDate.find((entry) => entry.habitId === habit._id) ?? null;
+      const recentHabitCheckIns = args.state.checkIns
+        .filter((entry) => entry.habitId === habit._id)
+        .sort(compareCheckInsDesc);
+      const checkInsLast7d = recentHabitCheckIns.filter(
+        (entry) => entry.date >= date7dStart && entry.date <= args.date,
+      );
+      const missedLast7d = checkInsLast7d.filter(
+        (entry) => entry.status === "missed",
+      ).length;
+      const completedLast7d = checkInsLast7d.filter(
+        (entry) => entry.status === "completed",
+      ).length;
+      const isToday = args.date === todayDate;
+      const baseRiskNote = buildRiskNote({
+        currentStreak: habit.currentStreak,
+        missedLast7d,
+        completedLast7d,
+        skipExists: Boolean(skip),
+        reminderRunState: reminderRun?.state ?? null,
+      });
+
+      let status: PlannerItemStatus = "pending";
+      if (skip) {
+        status = "skipped";
+      } else if (checkIn?.status) {
+        status = checkIn.status;
+      } else if (reminderRun?.state === "rescheduled") {
+        status = "rescheduled";
+      } else if (reminderRun?.state === "missed") {
+        status = "missed";
+      } else if (reminderRun?.state === "completed") {
+        status = "completed";
+      }
+
+      const item = {
+        itemType: "habit" as const,
+        itemId: habit._id,
+        title: habit.name,
+        scheduledTime: schedule.scheduledTime,
+        status,
+        riskNote:
+          isToday && reminders.some((entry) => !entry.sent)
+            ? `${baseRiskNote}; reminder still pending`
+            : baseRiskNote,
+        conflictWith: [],
+        itemDate: args.date,
+        skipped: Boolean(skip),
+        skipReason: skip?.reason ?? null,
+        checkInStatus: checkIn?.status ?? null,
+        reminderState: reminderRun?.state ?? null,
+        reminderStatus: isToday
+          ? {
+              pendingTypes: reminders
+                .filter((entry) => !entry.sent)
+                .map((entry) => entry.type) as ReminderType[],
+              sentTypes: reminders
+                .filter((entry) => entry.sent)
+                .map((entry) => entry.type) as ReminderType[],
+            }
+          : null,
+      };
+
+      return {
+        item,
+        isRelevant: isHabitRelevantForDate({
+          habit,
+          dayKey,
+          checkIn,
+          skip,
+          reminderRun,
+          reminders,
+        }),
+      };
+    });
+  const filteredHabitItems = habitItems
+    .filter((entry) => entry.isRelevant)
+    .map((entry) => entry.item);
+
+  const taskItems = args.state.tasks
+    .filter((task) => task.date === args.date)
+    .map((task) => ({
+      itemType: "task" as const,
+      itemId: task._id,
+      title: task.title,
+      scheduledTime: task.time ?? null,
+      status: task.status as PlannerItemStatus,
+      riskNote: getTaskRiskNote(task),
+      conflictWith: [],
+      itemDate: args.date,
+    }));
+
+  const items = applyConflictHints([...filteredHabitItems, ...taskItems]).sort(
+    comparePlannerItems,
+  );
+
+  return {
+    date: args.date,
+    dayKey,
+    items: items.map((item) => {
+      const conflictReason = buildConflictReason(item);
+      return {
+        ...item,
+        riskNote: conflictReason ?? item.riskNote,
+      };
+    }),
+  };
 }
 
 async function getExistingCheckInForHabit(args: {
@@ -481,6 +875,65 @@ export const executeSkipHabitForDate = internalMutation({
   },
 });
 
+export const createTask = internalMutation({
+  args: {
+    userId: v.id("users"),
+    title: v.string(),
+    date: v.string(),
+    time: v.optional(v.string()),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const normalizedTitle = args.title.trim();
+    if (!normalizedTitle) {
+      throw new Error("Task title is required");
+    }
+
+    const existing = (await ctx.db
+      .query("agentTasks")
+      .withIndex("by_user_date_status", (q) =>
+        q.eq("userId", args.userId).eq("date", args.date).eq("status", "pending"),
+      )
+      .collect()) as Doc<"agentTasks">[];
+
+    const duplicate =
+      existing.find(
+        (task) =>
+          task.title.toLowerCase() === normalizedTitle.toLowerCase() &&
+          (task.time ?? null) === (args.time ?? null),
+      ) ?? null;
+
+    if (duplicate) {
+      return {
+        status: "no_op" as const,
+        taskId: duplicate._id,
+        title: duplicate.title,
+        date: duplicate.date,
+        time: duplicate.time ?? null,
+      };
+    }
+
+    const taskId = await ctx.db.insert("agentTasks", {
+      userId: args.userId,
+      title: normalizedTitle,
+      date: args.date,
+      time: args.time,
+      status: "pending",
+      source: "chat",
+      createdAt: args.now,
+      updatedAt: args.now,
+    });
+
+    return {
+      status: "executed" as const,
+      taskId,
+      title: normalizedTitle,
+      date: args.date,
+      time: args.time ?? null,
+    };
+  },
+});
+
 export const getPlanForDate = internalQuery({
   args: {
     userId: v.id("users"),
@@ -488,102 +941,148 @@ export const getPlanForDate = internalQuery({
     now: v.number(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db.get(args.userId);
-    if (!user) {
-      throw new Error("User not found");
+    const state = await loadPlannerState(ctx, args.userId);
+    return buildPlanForDate({ state, date: args.date, now: args.now });
+  },
+});
+
+export const getRiskScan = internalQuery({
+  args: {
+    userId: v.id("users"),
+    date: v.string(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const state = await loadPlannerState(ctx, args.userId);
+    const today = args.date;
+    const tomorrow = shiftDateKey(args.date, 1);
+    const riskItems: RiskScanItem[] = [];
+
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = shiftDateKey(args.date, offset);
+      const plan = buildPlanForDate({ state, date, now: args.now });
+
+      for (const item of plan.items) {
+        if (item.status !== "pending" && item.status !== "rescheduled") {
+          continue;
+        }
+
+        const score = rankRiskScore({
+          item,
+          today,
+          tomorrow,
+        });
+        const reason = item.conflictWith.length
+          ? `bentrok sama ${item.conflictWith[0]}`
+          : item.riskNote;
+        const suggestion =
+          item.itemType === "task"
+            ? item.scheduledTime
+              ? `Kunci slot ini dan jangan numpuk item lain di sekitar ${item.scheduledTime}.`
+              : "Kasih jam yang jelas biar ga tenggelam."
+            : item.scheduledTime
+              ? `Siapkan ruang buat ${item.title} sekitar ${item.scheduledTime}.`
+              : "Kasih slot yang jelas buat habit ini.";
+
+        riskItems.push({
+          itemType: item.itemType,
+          title: item.title,
+          date,
+          scheduledTime: item.scheduledTime,
+          reason,
+          suggestion,
+          score,
+        });
+      }
     }
 
-    const timezone = getTimezone(user);
-    const planDate = new Date(`${args.date}T12:00:00.000Z`);
-    const dayKey = getDayKey(planDate, timezone);
-    const activeHabits = (await ctx.db
-      .query("habits")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .collect()) as Doc<"habits">[];
+    return {
+      startDate: args.date,
+      items: riskItems
+        .sort((left, right) => {
+          if (right.score !== left.score) {
+            return right.score - left.score;
+          }
+          if (left.date !== right.date) {
+            return left.date.localeCompare(right.date);
+          }
+          return (left.scheduledTime ?? "99:99").localeCompare(
+            right.scheduledTime ?? "99:99",
+          );
+        })
+        .slice(0, 3),
+    };
+  },
+});
 
-    const habits = activeHabits.filter((habit) => habit.isActive);
-    const checkInsForDate = (await ctx.db
-      .query("checkIns")
-      .withIndex("by_user_date", (q) =>
-        q.eq("userId", args.userId).eq("date", args.date),
-      )
-      .collect()) as Doc<"checkIns">[];
-    const remindersForDate = (await ctx.db
-      .query("reminders")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .collect()) as Doc<"reminders">[];
-    const skipsForDate = (await ctx.db
-      .query("habitSkips")
-      .withIndex("by_user_date", (q) =>
-        q.eq("userId", args.userId).eq("date", args.date),
-      )
-      .collect()) as Doc<"habitSkips">[];
-    const allCheckIns = (await ctx.db
-      .query("checkIns")
-      .withIndex("by_user_date", (q) => q.eq("userId", args.userId))
-      .collect()) as Doc<"checkIns">[];
-    const date7dStart = shiftDateKey(args.date, -6);
-    const todayDate = getDateKey(new Date(args.now), timezone);
+export const getSimpleRescheduleSuggestions = internalQuery({
+  args: {
+    userId: v.id("users"),
+    date: v.string(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const state = await loadPlannerState(ctx, args.userId);
+    const plan = buildPlanForDate({ state, date: args.date, now: args.now });
+    const suggestions: RescheduleSuggestionItem[] = [];
 
-    const items = habits
-      .filter((habit) => {
-        const skipExists = skipsForDate.some((skip) => skip.habitId === habit._id);
-        return habit.targetDays.includes(dayKey) || skipExists;
-      })
-      .map((habit) => {
-        const schedule = getScheduleForDay(habit, dayKey);
-        const checkIn =
-          checkInsForDate.find((entry) => entry.habitId === habit._id) ?? null;
-        const skip =
-          skipsForDate.find((entry) => entry.habitId === habit._id) ?? null;
-        const reminders = remindersForDate.filter(
-          (entry) => entry.habitId === habit._id && entry.date === args.date,
-        );
-        const recentHabitCheckIns = allCheckIns
-          .filter((entry) => entry.habitId === habit._id)
-          .sort(compareCheckInsDesc);
-        const checkInsLast7d = recentHabitCheckIns.filter(
-          (entry) => entry.date >= date7dStart && entry.date <= args.date,
-        );
-        const missedLast7d = checkInsLast7d.filter(
-          (entry) => entry.status === "missed",
-        ).length;
-        const completedLast7d = checkInsLast7d.filter(
-          (entry) => entry.status === "completed",
-        ).length;
-        const isToday = args.date === todayDate;
+    const taskConflicts = plan.items.filter(
+      (item) =>
+        item.itemType === "task" &&
+        item.status === "pending" &&
+        item.conflictWith.length > 0,
+    );
 
-        return {
-          habitId: habit._id,
-          habitName: habit.name,
-          scheduledTime: schedule.scheduledTime,
-          skipped: Boolean(skip),
-          skipReason: skip?.reason ?? null,
-          checkInStatus: checkIn?.status ?? null,
-          reminderStatus: isToday
-            ? {
-                pendingTypes: reminders
-                  .filter((entry) => !entry.sent)
-                  .map((entry) => entry.type) as ReminderType[],
-                sentTypes: reminders
-                  .filter((entry) => entry.sent)
-                  .map((entry) => entry.type) as ReminderType[],
-              }
-            : null,
-          riskNote: buildRiskNote({
-            currentStreak: habit.currentStreak,
-            missedLast7d,
-            completedLast7d,
-            skipExists: Boolean(skip),
-          }),
-        };
-      })
-      .sort((left, right) => left.scheduledTime.localeCompare(right.scheduledTime));
+    for (const item of taskConflicts) {
+      suggestions.push({
+        title: item.title,
+        currentTime: item.scheduledTime,
+        suggestedTime: buildSuggestionTime(item.scheduledTime, 60),
+        reason: `bentrok sama ${item.conflictWith[0]}`,
+      });
+    }
+
+    if (suggestions.length === 0) {
+      const untimedTask = plan.items.find(
+        (item) =>
+          item.itemType === "task" &&
+          item.status === "pending" &&
+          !item.scheduledTime,
+      );
+
+      if (untimedTask) {
+        suggestions.push({
+          title: untimedTask.title,
+          currentTime: null,
+          suggestedTime: "09:00",
+          reason: "belum punya slot yang jelas",
+        });
+      }
+    }
+
+    if (suggestions.length === 0) {
+      const riskHabit = plan.items.find(
+        (item) =>
+          item.itemType === "habit" &&
+          item.status === "pending" &&
+          (item.riskNote.includes("slipping") ||
+            item.riskNote.includes("ignored") ||
+            item.riskNote.includes("resistance")),
+      );
+
+      if (riskHabit) {
+        suggestions.push({
+          title: riskHabit.title,
+          currentTime: riskHabit.scheduledTime,
+          suggestedTime: buildSuggestionTime(riskHabit.scheduledTime, -60),
+          reason: riskHabit.riskNote,
+        });
+      }
+    }
 
     return {
       date: args.date,
-      dayKey,
-      items,
+      items: suggestions.slice(0, 3),
     };
   },
 });

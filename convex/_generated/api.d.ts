@@ -10,6 +10,7 @@
 
 import type * as agentActions from "../agentActions.js";
 import type * as agentMemory from "../agentMemory.js";
+import type * as agentModelRuns from "../agentModelRuns.js";
 import type * as chat from "../chat.js";
 import type * as chatAction from "../chatAction.js";
 import type * as checkIns from "../checkIns.js";
@@ -17,6 +18,7 @@ import type * as crons from "../crons.js";
 import type * as devSeeds from "../devSeeds.js";
 import type * as habits from "../habits.js";
 import type * as messages from "../messages.js";
+import type * as modelProvider from "../modelProvider.js";
 import type * as notifications from "../notifications.js";
 import type * as notificationsAction from "../notificationsAction.js";
 import type * as reminders from "../reminders.js";
@@ -34,6 +36,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   agentActions: typeof agentActions;
   agentMemory: typeof agentMemory;
+  agentModelRuns: typeof agentModelRuns;
   chat: typeof chat;
   chatAction: typeof chatAction;
   checkIns: typeof checkIns;
@@ -41,6 +44,7 @@ declare const fullApi: ApiFromModules<{
   devSeeds: typeof devSeeds;
   habits: typeof habits;
   messages: typeof messages;
+  modelProvider: typeof modelProvider;
   notifications: typeof notifications;
   notificationsAction: typeof notificationsAction;
   reminders: typeof reminders;

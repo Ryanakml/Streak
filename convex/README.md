@@ -1,90 +1,119 @@
-# Welcome to your Convex functions directory!
+# Convex Backend Guide
 
-Write your Convex functions here.
-See https://docs.convex.dev/functions for more.
+This directory contains the Streak backend: schema, database functions, AI actions, reminder processing, push notification delivery, agent memory, verification seeds, and cron configuration.
 
-A query function that takes two arguments looks like:
+The root README is the main project entry point. This file is a focused reference for developers working inside `convex/`.
 
-```ts
-// convex/myFunctions.ts
-import { query } from "./_generated/server";
-import { v } from "convex/values";
+## Directory Contents
 
-export const myQueryFunction = query({
-  // Validators for arguments.
-  args: {
-    first: v.number(),
-    second: v.string(),
-  },
+| File | Purpose |
+| --- | --- |
+| `schema.ts` | Convex table definitions and indexes. |
+| `users.ts` | Clerk-linked user sync, profile update, subscription tier sync, and daily message budget. |
+| `habits.ts` | Habit CRUD and reminder refresh scheduling. |
+| `checkIns.ts` | Habit completion, miss, and bonus logs. |
+| `workoutLogs.ts` | Structured workout logs attached to check-ins. |
+| `messages.ts` | Chat message queries and mutations. |
+| `chat.ts` | Internal chat context and persistence helpers. |
+| `chatAction.ts` | AI chat action, intent routing, response generation, and operational side effects. |
+| `agentActions.ts` | Internal auditable actions such as log completion, log miss, reschedule, skip, planning, and risk scans. |
+| `agentMemory.ts` | Agent episodes and rolling memory summaries. |
+| `reminders.ts` | Reminder queue, reminder state machine, copy generation, and due reminder processing mutation. |
+| `notifications.ts` | Browser push subscription storage and cleanup helpers. |
+| `notificationsAction.ts` | Node action that sends web push notifications. |
+| `weeklyReports.ts` | Weekly report queries and persistence. |
+| `weeklyReviewAction.ts` | Weekly review generation and optional push delivery. |
+| `crons.ts` | Scheduled jobs for reminders, weekly reviews, and memory refresh. |
+| `devSeeds.ts` | Seed and verification helpers for the phased agent/reminder work. |
+| `_generated/` | Generated Convex API and data model types. |
 
-  // Function implementation.
-  handler: async (ctx, args) => {
-    // Read the database as many times as you need here.
-    // See https://docs.convex.dev/database/reading-data.
-    const documents = await ctx.db.query("tablename").collect();
+## Runtime Environment
 
-    // Arguments passed from the client are properties of the args object.
-    console.log(args.first, args.second);
+Convex server actions read server-side environment variables from the Convex runtime. The local Next.js `.env.local` file is useful for the frontend and local helper scripts, but deployed Convex actions also need their own environment values configured.
 
-    // Write arbitrary JavaScript here: filter, aggregate, build derived data,
-    // remove non-public properties, or create new objects.
-    return documents;
-  },
-});
+Core backend variables:
+
+- `CLERK_ISSUER_URL` or `CLERK_JWT_ISSUER_DOMAIN`
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` as an issuer fallback in `auth.config.ts`
+- `GROQ_API_KEY`
+- `GEMINI_API_KEY`
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `VAPID_SUBJECT`
+
+Frontend and scripts also require:
+
+- `NEXT_PUBLIC_CONVEX_URL`
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`
+
+## Scheduled Jobs
+
+`crons.ts` registers three recurring jobs:
+
+| Cron | Frequency | Target |
+| --- | --- | --- |
+| `process-due-reminders` | Every 1 minute | `internal.notificationsAction.processDueReminders` |
+| `process-due-weekly-reviews` | Every 1 minute | `internal.weeklyReviewAction.processDueWeeklyReviews` |
+| `process-daily-agent-memory` | Every 1 hour | `internal.agentMemory.processDailySummaries` |
+
+## Reminder Model
+
+The reminder system uses two different tables for different jobs:
+
+- `reminders` is the delivery queue.
+- `reminderRuns` is the state machine for one `habit x date`.
+
+Reminder run states include:
+
+- `scheduled`
+- `pre_reminded`
+- `user_acknowledged`
+- `user_hesitant`
+- `ignored_once`
+- `completed`
+- `missed`
+- `rescheduled`
+- `skipped`
+
+This lets chat, reminder processing, skips, reschedules, completions, and auto-misses operate on the same source of truth.
+
+## Chat And Agent Model
+
+The chat action is more than a text reply path. It can:
+
+- Persist user and AI messages.
+- Classify completion, miss, excuse, question, bonus, and operational intents.
+- Execute internal actions when the user asks to complete, miss, reschedule, skip, plan, or scan risk.
+- Write check-ins and workout logs.
+- Advance active reminder runs when a message is related to an in-flight reminder.
+- Log actions to `agentActionLogs`.
+- Write important events to `agentEpisodes`.
+- Use rolling summaries from `agentMemory`.
+
+Keep new side effects behind auditable internal mutations. Avoid hiding product state changes inside response wording.
+
+## Weekly Reviews
+
+Weekly reviews collect prior-week habit and check-in context, generate a coach summary, and store it in `weeklyReports`. The action can also send a push notification when subscriptions exist.
+
+## Development Commands
+
+From the repo root:
+
+```bash
+npx convex dev
+npx convex codegen
+npm run seed:phase4 -- --email user@example.com
+npm run phase4:process-reminders -- --email user@example.com
 ```
 
-Using this query function in a React component looks like:
+The npm wrapper scripts in the root `package.json` load `.env.local` and call selected seed or verification helpers.
 
-```ts
-const data = useQuery(api.myFunctions.myQueryFunction, {
-  first: 10,
-  second: "hello",
-});
-```
+## Editing Notes
 
-A mutation function looks like:
-
-```ts
-// convex/myFunctions.ts
-import { mutation } from "./_generated/server";
-import { v } from "convex/values";
-
-export const myMutationFunction = mutation({
-  // Validators for arguments.
-  args: {
-    first: v.string(),
-    second: v.string(),
-  },
-
-  // Function implementation.
-  handler: async (ctx, args) => {
-    // Insert or modify documents in the database here.
-    // Mutations can also read from the database like queries.
-    // See https://docs.convex.dev/database/writing-data.
-    const message = { body: args.first, author: args.second };
-    const id = await ctx.db.insert("messages", message);
-
-    // Optionally, return a value from your mutation.
-    return await ctx.db.get("messages", id);
-  },
-});
-```
-
-Using this mutation function in a React component looks like:
-
-```ts
-const mutation = useMutation(api.myFunctions.myMutationFunction);
-function handleButtonPress() {
-  // fire and forget, the most common way to use mutations
-  mutation({ first: "Hello!", second: "me" });
-  // OR
-  // use the result once the mutation has completed
-  mutation({ first: "Hello!", second: "me" }).then((result) =>
-    console.log(result),
-  );
-}
-```
-
-Use the Convex CLI to push your functions to a deployment. See everything
-the Convex CLI can do by running `npx convex -h` in your project root
-directory. To learn more, launch the docs with `npx convex docs`.
+- Update `schema.ts` first when adding or changing tables.
+- Regenerate Convex types after schema or function export changes.
+- Keep ownership checks in user-facing queries and mutations.
+- Keep cron-triggered work internal unless there is a deliberate public action wrapper.
+- Do not treat `reminders` as durable state. Use `reminderRuns` for stateful product behavior.
+- Do not commit secrets into environment files.
