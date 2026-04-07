@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "seed:phase1": "node scripts/seed-phase1-verification.mjs",
-    "seed:phase2": "node scripts/seed-phase2-verification.mjs"
+    "seed:phase2": "node scripts/seed-phase2-verification.mjs",
+    "seed:phase3": "node scripts/seed-phase3-verification.mjs",
+    "phase3:process-reminders": "node scripts/process-phase3-reminders.mjs",
+    "phase3:refresh-memory": "node scripts/refresh-phase3-memory.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

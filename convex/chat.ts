@@ -2,6 +2,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
+import { selectMemorySnapshot } from "./agentMemory";
 
 const exerciseValidator = v.object({
   name: v.string(),
@@ -174,6 +175,15 @@ export const getChatContext = internalQuery({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
     const todayReminders = allReminders.filter((reminder) => reminder.date === date);
+    const recentEpisodes = await ctx.db
+      .query("agentEpisodes")
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .take(12);
+    const memoryRows = await ctx.db
+      .query("agentMemory")
+      .withIndex("by_user_scope", (q) => q.eq("userId", user._id))
+      .collect();
 
     const today = new Date(args.now);
     const todayKey = getTodayKey(today, timezone);
@@ -198,6 +208,11 @@ export const getChatContext = internalQuery({
           sentTypes: [],
         })
       : null;
+    const memorySnapshot = selectMemorySnapshot({
+      memories: memoryRows,
+      episodes: recentEpisodes,
+      habitId: todayHabit?._id ?? (activeHabits.length === 1 ? activeHabits[0]?._id : null),
+    });
 
     return {
       user,
@@ -211,6 +226,11 @@ export const getChatContext = internalQuery({
       todayCheckIns,
       recentMessages: [...recentMessagesDesc].reverse(),
       recentCheckIns,
+      recentAgentEpisodes: recentEpisodes,
+      agentMemories: memoryRows,
+      relevantEpisodes: memorySnapshot.relevantEpisodes,
+      globalMemorySummary: memorySnapshot.globalSummary,
+      habitMemorySummary: memorySnapshot.habitSummary,
       habitSummaries,
       todayReminderStatus,
       pendingClarificationHabitId:

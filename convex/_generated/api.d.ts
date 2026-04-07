@@ -9,6 +9,7 @@
  */
 
 import type * as agentActions from "../agentActions.js";
+import type * as agentMemory from "../agentMemory.js";
 import type * as chat from "../chat.js";
 import type * as chatAction from "../chatAction.js";
 import type * as checkIns from "../checkIns.js";
@@ -32,6 +33,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agentActions: typeof agentActions;
+  agentMemory: typeof agentMemory;
   chat: typeof chat;
   chatAction: typeof chatAction;
   checkIns: typeof checkIns;

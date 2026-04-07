@@ -183,4 +183,28 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
+
+  agentEpisodes: defineTable({
+    userId: v.id("users"),
+    habitId: v.optional(v.id("habits")),
+    date: v.string(),
+    type: v.string(),
+    summary: v.string(),
+    metadata: v.any(),
+    sourceMessageId: v.optional(v.id("messages")),
+    createdAt: v.number(),
+  })
+    .index("by_user_date", ["userId", "date"])
+    .index("by_user_habit_date", ["userId", "habitId", "date"]),
+
+  agentMemory: defineTable({
+    userId: v.id("users"),
+    scope: v.union(v.literal("global"), v.literal("habit")),
+    habitId: v.optional(v.id("habits")),
+    summary: v.string(),
+    confidence: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user_scope", ["userId", "scope"])
+    .index("by_user_habit_scope", ["userId", "habitId", "scope"]),
 });

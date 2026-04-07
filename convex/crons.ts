@@ -17,4 +17,11 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "process-daily-agent-memory",
+  { hours: 1 },
+  internal.agentMemory.processDailySummaries,
+  {},
+);
+
 export default crons;

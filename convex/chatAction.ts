@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { selectMemorySnapshot } from "./agentMemory";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.3-70b-versatile";
@@ -49,11 +50,14 @@ type WorkoutPayload = {
   notes?: string;
 };
 
+type QuestionFocus = "general" | "pattern" | "status" | "schedule";
+
 type ChatExtractionResult = {
   classification: ChatClassification;
   habitName: string | null;
   shouldLogCheckIn: boolean;
   checkInStatus: "completed" | "missed" | "bonus" | null;
+  questionFocus: QuestionFocus;
   reason: string | null;
   conversationSummary: string | null;
   needsWorkoutClarification: boolean;
@@ -141,6 +145,7 @@ type ChatDecision = {
   mode: ResponseMode;
   requiredAction: RequiredAction;
   resolvedHabitId: Id<"habits"> | null;
+  questionFocus: QuestionFocus;
   patternSummary: HabitPerformanceSummary | null;
   requiresClarification: boolean;
   clarificationQuestion: string | null;
@@ -226,6 +231,16 @@ type ChatContext = {
   todayCheckIns: Doc<"checkIns">[];
   recentMessages: MessageSnapshot[];
   recentCheckIns: Doc<"checkIns">[];
+  recentAgentEpisodes: Doc<"agentEpisodes">[];
+  agentMemories: Doc<"agentMemory">[];
+  relevantEpisodes: Array<{
+    type: string;
+    summary: string;
+    date: string;
+    habitId: Id<"habits"> | null;
+  }>;
+  globalMemorySummary: string | null;
+  habitMemorySummary: string | null;
   habitSummaries: HabitPerformanceSummary[];
   todayReminderStatus: HabitPerformanceSummary["todayReminderStatus"] | null;
   pendingClarificationHabitId: Id<"habits"> | null;
@@ -305,6 +320,141 @@ function summarizePatternSummary(summary: HabitPerformanceSummary | null) {
     lastCheckInDate: summary.lastCheckInDate,
     recentMissReasons: summary.recentMissReasons,
     todayReminderStatus: summary.todayReminderStatus,
+  };
+}
+
+function summarizeStatSignal(summary: HabitPerformanceSummary | null) {
+  if (!summary) {
+    return null;
+  }
+
+  if (summary.missedLast7d >= 3) {
+    return `${summary.habitName} missed ${summary.missedLast7d} times in the last 7 days.`;
+  }
+
+  if (summary.completedLast7d >= 4) {
+    return `${summary.habitName} was completed ${summary.completedLast7d} times in the last 7 days.`;
+  }
+
+  if (summary.currentStreak >= 3) {
+    return `${summary.habitName} is on a ${summary.currentStreak}-day streak.`;
+  }
+
+  if (summary.lastCheckInStatus && summary.lastCheckInDate) {
+    return `The latest ${summary.habitName} result was ${summary.lastCheckInStatus} on ${summary.lastCheckInDate}.`;
+  }
+
+  return null;
+}
+
+function getPrimaryQuestionSignal(args: {
+  decision: ChatDecision;
+  context: ChatContext;
+}) {
+  if (args.decision.mode !== "question") {
+    return null;
+  }
+
+  if (args.decision.questionFocus === "pattern") {
+    return (
+      args.context.habitMemorySummary ||
+      args.context.relevantEpisodes[0]?.summary ||
+      args.context.globalMemorySummary ||
+      summarizeStatSignal(args.decision.patternSummary)
+    );
+  }
+
+  if (args.decision.questionFocus === "status") {
+    return (
+      summarizeStatSignal(args.decision.patternSummary) ||
+      args.context.habitMemorySummary ||
+      args.context.relevantEpisodes[0]?.summary
+    );
+  }
+
+  return (
+    args.context.habitMemorySummary ||
+    summarizeStatSignal(args.decision.patternSummary) ||
+    args.context.relevantEpisodes[0]?.summary ||
+    null
+  );
+}
+
+function getStrongestEpisodeSignal(context: ChatContext) {
+  const priorityOrder = [
+    "reminder_ignored",
+    "miss_with_reason",
+    "recovered_after_prompt",
+    "user_acknowledged",
+    "hesitation_detected",
+    "schedule_changed",
+    "habit_skipped",
+    "completed_with_effort",
+  ];
+
+  for (const type of priorityOrder) {
+    const match = context.relevantEpisodes.find((entry) => entry.type === type);
+    if (match?.summary) {
+      return match.summary;
+    }
+  }
+
+  return context.relevantEpisodes[0]?.summary ?? null;
+}
+
+function getSupportingQuestionSignal(args: {
+  decision: ChatDecision;
+  context: ChatContext;
+}) {
+  if (args.decision.mode !== "question") {
+    return null;
+  }
+
+  const statSignal = summarizeStatSignal(args.decision.patternSummary);
+  const episodeSignal = getStrongestEpisodeSignal(args.context);
+  const memorySignal = args.context.habitMemorySummary ?? args.context.globalMemorySummary;
+
+  if (args.decision.questionFocus === "pattern") {
+    return episodeSignal && episodeSignal !== memorySignal
+      ? episodeSignal
+      : statSignal;
+  }
+
+  return memorySignal && memorySignal !== statSignal ? memorySignal : episodeSignal;
+}
+
+function getHabitReminderStatus(
+  context: ChatContext,
+  habitId: Id<"habits"> | null,
+) {
+  if (!habitId) {
+    return null;
+  }
+
+  return (
+    context.habitSummaries.find((summary) => summary.habitId === habitId)
+      ?.todayReminderStatus ?? null
+  );
+}
+
+function buildEffectiveMemoryContext(
+  context: ChatContext,
+  habit: Doc<"habits"> | null,
+): ChatContext {
+  const snapshot = selectMemorySnapshot({
+    memories: context.agentMemories,
+    episodes: context.recentAgentEpisodes,
+    habitId: habit?._id ?? null,
+  });
+
+  return {
+    ...context,
+    relevantEpisodes: snapshot.relevantEpisodes,
+    globalMemorySummary: snapshot.globalSummary,
+    habitMemorySummary: snapshot.habitSummary,
+    todayReminderStatus:
+      getHabitReminderStatus(context, habit?._id ?? null) ??
+      context.todayReminderStatus,
   };
 }
 
@@ -608,6 +758,7 @@ function normalizeExtraction(value: unknown): ChatExtractionResult {
     | "missed"
     | "bonus"
     | "";
+  const questionFocus = coerceString(candidate.questionFocus) as QuestionFocus;
 
   return {
     classification:
@@ -627,6 +778,13 @@ function normalizeExtraction(value: unknown): ChatExtractionResult {
       checkInStatus === "bonus"
         ? checkInStatus
         : null,
+    questionFocus:
+      questionFocus === "pattern" ||
+      questionFocus === "status" ||
+      questionFocus === "schedule" ||
+      questionFocus === "general"
+        ? questionFocus
+        : "general",
     reason: coerceString(candidate.reason) || null,
     conversationSummary: coerceString(candidate.conversationSummary) || null,
     needsWorkoutClarification: Boolean(candidate.needsWorkoutClarification),
@@ -894,9 +1052,14 @@ async function extractChatOutcome(input: {
       role: "system",
       content:
         "You classify habit-coach chat messages into structured JSON only. " +
-        "Return valid JSON with keys classification, habitName, shouldLogCheckIn, checkInStatus, reason, conversationSummary, needsWorkoutClarification, workout. " +
+        "Return valid JSON with keys classification, habitName, shouldLogCheckIn, checkInStatus, questionFocus, reason, conversationSummary, needsWorkoutClarification, workout. " +
         "classification must be one of completed, missed, question, excuse, bonus, clarify_workout. " +
         "checkInStatus must be completed, missed, bonus, or null. " +
+        "questionFocus must be one of general, pattern, status, schedule. " +
+        "Use questionFocus=pattern when the user asks about trend, pattern, progress lately, what keeps happening, recurring issues, or why a habit has been slipping. " +
+        "Use questionFocus=status when the user asks about current status, streak, whether they should do it today, or simple factual progress. " +
+        "Use questionFocus=schedule when the question is specifically about timing or schedule. " +
+        "Use questionFocus=general otherwise. " +
         "When the user says they completed a workout but does not provide enough workout detail to extract at least one specific exercise or cardio entry with a measurable detail like duration, distance, sets, reps, or weight, set needsWorkoutClarification=true and shouldLogCheckIn=false. " +
         "When they answer a prior workout clarification with enough workout details, classify as clarify_workout and include workout. " +
         "Generic body-part answers like leg, legs, upper body, lower body, cardio, gym, or workout are not enough detail yet. " +
@@ -1314,6 +1477,7 @@ async function generateCoachReply(input: {
     resolvedTurnKind: input.resolvedTurnKind ?? null,
     mode: input.decision.mode,
     classification: input.extraction.classification,
+    questionFocus: input.decision.questionFocus,
     reason: input.extraction.reason,
     conversationSummary: input.extraction.conversationSummary,
     requiresClarification: input.decision.requiresClarification,
@@ -1326,6 +1490,17 @@ async function generateCoachReply(input: {
       ? summarizeHabit(input.resolvedHabit)
       : null,
     patternSummary: summarizePatternSummary(input.decision.patternSummary),
+    primaryQuestionSignal: getPrimaryQuestionSignal({
+      decision: input.decision,
+      context: input.context,
+    }),
+    supportingQuestionSignal: getSupportingQuestionSignal({
+      decision: input.decision,
+      context: input.context,
+    }),
+    globalMemorySummary: input.context.globalMemorySummary,
+    habitMemorySummary: input.context.habitMemorySummary,
+    relevantEpisodes: input.context.relevantEpisodes,
     todayHabit: input.context.todayHabit
       ? summarizeHabit(input.context.todayHabit)
       : null,
@@ -1350,10 +1525,14 @@ async function generateCoachReply(input: {
         "For completion mode, acknowledge the result and push toward the next concrete action. " +
         "For miss mode, call out the miss, use at most one relevant pattern signal, and reset focus toward the next scheduled chance. " +
         "For hesitation mode, treat excuses as resistance, not as a logged miss, and push the smallest next action. " +
-        "For question mode, answer briefly using habit context and recent performance only. " +
+        "For question mode, answer briefly and prioritize the most useful signal for the question. " +
+        "If questionFocus is pattern, lead with primaryQuestionSignal when it exists. Prefer repeated reasons, repeated misses, recovery-after-prompt, or reminder-ignore patterns over generic weekly counts. " +
+        "If questionFocus is status, use the clearest current-state signal first, then at most one supporting memory clue. " +
+        "Use supportingQuestionSignal only if it adds one useful layer, not as a second paragraph. " +
         "For clarify_workout mode, ask for the missing workout details needed for logging. " +
         "Never dump raw numbers unless one short stat is the most relevant signal. " +
         "Only mention a pattern if the patternSummary clearly supports it. " +
+        "Use globalMemorySummary, habitMemorySummary, relevantEpisodes, primaryQuestionSignal, and supportingQuestionSignal as lightweight cross-day memory. Mention them only if they clearly sharpen the reply, but for pattern questions they should usually beat generic stats. " +
         "If loggedStatus is bonus, acknowledge the extra work without claiming streak progress. " +
         "Do not mention reminders, weekly reviews, billing, or unsupported features.",
     },
@@ -1443,6 +1622,7 @@ function buildChatDecision(input: {
     mode,
     requiredAction: input.requiredAction,
     resolvedHabitId: input.resolvedHabit?._id ?? null,
+    questionFocus: input.extraction.questionFocus,
     patternSummary: getPatternSummary(input.context, input.resolvedHabit),
     requiresClarification: input.requiresClarification,
     clarificationQuestion: input.clarificationQuestion,
@@ -1738,6 +1918,11 @@ export const sendMessage = action({
       resolvedHabit,
       pendingWorkoutHabit: pendingHabit,
     });
+    const effectiveHabit = resolvedTurn.resolvedHabit;
+    const effectiveMemoryContext = buildEffectiveMemoryContext(
+      context,
+      effectiveHabit,
+    );
 
     if (resolvedTurn.pendingActionToCancel) {
       await ctx.runMutation(internal.agentActions.logAction, {
@@ -1787,6 +1972,7 @@ export const sendMessage = action({
         habitName: resolvedTurn.resolvedHabit?.name ?? null,
         shouldLogCheckIn: false,
         checkInStatus: null,
+        questionFocus: "general",
         reason: null,
         conversationSummary: null,
         needsWorkoutClarification: false,
@@ -1797,7 +1983,7 @@ export const sendMessage = action({
         requiredAction: resolvedTurn.requiredAction,
         extraction: clarificationExtraction,
         resolvedHabit: resolvedTurn.resolvedHabit,
-        context,
+        context: effectiveMemoryContext,
         requiresClarification: true,
         clarificationQuestion: resolvedTurn.route.clarificationQuestion,
         pendingActionId,
@@ -1945,6 +2131,7 @@ export const sendMessage = action({
         habitName,
         shouldLogCheckIn: false,
         checkInStatus: null,
+        questionFocus: "general",
         reason: null,
         conversationSummary: null,
         needsWorkoutClarification: false,
@@ -1955,7 +2142,7 @@ export const sendMessage = action({
         requiredAction: resolvedTurn.requiredAction,
         extraction: executionExtraction,
         resolvedHabit: resolvedTurn.resolvedHabit,
-        context,
+        context: effectiveMemoryContext,
         requiresClarification: false,
         clarificationQuestion: null,
         pendingActionId: null,
@@ -1996,6 +2183,48 @@ export const sendMessage = action({
         resultSummary: actionResultSummary || aiContent,
         createdAt: now,
       });
+
+      if (
+        resolvedTurn.requiredAction === "reschedule_habit_time" &&
+        resolvedTurn.resolvedHabit &&
+        resolvedTurn.route.targetDate &&
+        resolvedTurn.route.targetTime &&
+        actionStatus === "executed"
+      ) {
+        await ctx.runMutation(internal.agentMemory.recordEpisode, {
+          userId: context.user._id,
+          habitId: resolvedTurn.resolvedHabit._id,
+          date: context.date,
+          type: "schedule_changed",
+          summary: `${resolvedTurn.resolvedHabit.name} rescheduled to ${resolvedTurn.route.targetTime} for ${resolvedTurn.route.targetDate}.`,
+          metadata: {
+            targetDate: resolvedTurn.route.targetDate,
+            targetTime: resolvedTurn.route.targetTime,
+          },
+          sourceMessageId: userMessageId,
+          createdAt: now,
+        });
+      }
+
+      if (
+        resolvedTurn.requiredAction === "skip_habit_for_date" &&
+        resolvedTurn.resolvedHabit &&
+        resolvedTurn.route.targetDate &&
+        actionStatus === "executed"
+      ) {
+        await ctx.runMutation(internal.agentMemory.recordEpisode, {
+          userId: context.user._id,
+          habitId: resolvedTurn.resolvedHabit._id,
+          date: context.date,
+          type: "habit_skipped",
+          summary: `${resolvedTurn.resolvedHabit.name} was intentionally skipped for ${resolvedTurn.route.targetDate}.`,
+          metadata: {
+            targetDate: resolvedTurn.route.targetDate,
+          },
+          sourceMessageId: userMessageId,
+          createdAt: now,
+        });
+      }
 
       const aiMessageId = (await ctx.runMutation(internal.chat.storeMessage, {
         userId: context.user._id,
@@ -2042,7 +2271,7 @@ export const sendMessage = action({
           resolvedTurn.kind === "duplicate_no_op",
       },
       resolvedHabit: baseResolvedHabit,
-      context,
+      context: effectiveMemoryContext,
       requiresClarification: resolvedTurn.kind === "checkin_clarification",
       clarificationQuestion: null,
       pendingActionId: null,
@@ -2101,7 +2330,7 @@ export const sendMessage = action({
 
     const aiContent = await generateCoachReply({
       content,
-      context,
+      context: effectiveMemoryContext,
       extraction: {
         ...baseExtraction,
         shouldLogCheckIn:
@@ -2170,6 +2399,78 @@ export const sendMessage = action({
       intent: aiIntent,
       timestamp: now,
     })) as Id<"messages">;
+
+    const reminderStatus = getHabitReminderStatus(
+      effectiveMemoryContext,
+      baseResolvedHabit?._id ?? null,
+    );
+    const hasSentReminderToday = Boolean(reminderStatus?.sentTypes.length);
+
+    if (
+      resolvedTurn.kind === "checkin_execution" &&
+      resolvedTurn.requiredAction === "log_miss"
+    ) {
+      await ctx.runMutation(internal.agentMemory.recordEpisode, {
+        userId: context.user._id,
+        habitId: resolvedTurn.resolvedHabit._id,
+        date: context.date,
+        type: "miss_with_reason",
+        summary:
+          resolvedTurn.extraction.reason?.trim()
+            ? `${resolvedTurn.resolvedHabit.name} missed with reason: ${resolvedTurn.extraction.reason.trim()}`
+            : `${resolvedTurn.resolvedHabit.name} was missed.`,
+        metadata: {
+          status: "missed",
+          reason: resolvedTurn.extraction.reason,
+          reminderSentToday: hasSentReminderToday,
+        },
+        sourceMessageId: userMessageId,
+        createdAt: now,
+      });
+    }
+
+    if (
+      resolvedTurn.kind === "checkin_execution" &&
+      resolvedTurn.requiredAction === "log_completion"
+    ) {
+      await ctx.runMutation(internal.agentMemory.recordEpisode, {
+        userId: context.user._id,
+        habitId: resolvedTurn.resolvedHabit._id,
+        date: context.date,
+        type: hasSentReminderToday ? "recovered_after_prompt" : "completed_with_effort",
+        summary: `${resolvedTurn.resolvedHabit.name} completed with concrete workout detail.`,
+        metadata: {
+          status: resolvedTurn.checkInStatus,
+          workout: resolvedTurn.workout,
+          reminderSentToday: hasSentReminderToday,
+        },
+        sourceMessageId: userMessageId,
+        createdAt: now,
+      });
+    }
+
+    if (
+      resolvedTurn.kind === "conversation_only" &&
+      resolvedTurn.extraction.classification === "excuse" &&
+      baseResolvedHabit
+    ) {
+      await ctx.runMutation(internal.agentMemory.recordEpisode, {
+        userId: context.user._id,
+        habitId: baseResolvedHabit._id,
+        date: context.date,
+        type: hasSentReminderToday ? "user_acknowledged" : "hesitation_detected",
+        summary:
+          resolvedTurn.extraction.reason?.trim()
+            ? `${baseResolvedHabit.name} hesitation: ${resolvedTurn.extraction.reason.trim()}`
+            : `${baseResolvedHabit.name} hesitation detected.`,
+        metadata: {
+          reason: resolvedTurn.extraction.reason,
+          reminderSentToday: hasSentReminderToday,
+        },
+        sourceMessageId: userMessageId,
+        createdAt: now,
+      });
+    }
 
     return {
       userMessageId,

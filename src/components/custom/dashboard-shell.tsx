@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -425,11 +425,12 @@ function HabitComposerDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger>
-        <Button type="button" disabled={disabled}>
-          <Plus />
-          New Habit
-        </Button>
+      <DialogTrigger
+        className={buttonVariants()}
+        disabled={disabled}
+      >
+        <Plus />
+        New Habit
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
@@ -1487,7 +1488,7 @@ function HomeHabitCard({
                         ? "Queued up"
                         : "Off the clock"}
             </p>
-            <p className="mt-3 text-sm uppercase tracking-[0.12em] opacity-80">
+            <p className="mt-3 text-sm leading-relaxed opacity-90">
               {snapshot.support}
             </p>
             <div className="mt-4 flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em]">
@@ -1556,12 +1557,12 @@ function HomeHabitCard({
         </div>
 
         <div className="space-y-3 border-t-2 border-current/15 pt-5">
-          <p className="text-sm uppercase tracking-[0.12em] opacity-80">
-            <span className="mr-2 font-black text-current">Rules:</span>
+          <p className="text-sm leading-relaxed opacity-90">
+            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">Rules:</span>
             {habit.rules}
           </p>
-          <p className="text-sm uppercase tracking-[0.12em] opacity-80">
-            <span className="mr-2 font-black text-current">Motivation:</span>
+          <p className="text-sm leading-relaxed opacity-90">
+            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">Motivation:</span>
             {habit.motivation}
           </p>
           <div className="flex flex-wrap gap-2">
@@ -1746,12 +1747,14 @@ function ChatTab({
   onUpgrade: () => Promise<void>;
 }) {
   const sortedMessages = sortByTimestamp(messages);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const limitReached = budgetStatus?.limitReached ?? false;
   const lastMessageId = sortedMessages[sortedMessages.length - 1]?._id ?? null;
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
   }, [lastMessageId, sortedMessages.length]);
 
   const quickActions = primarySnapshot
@@ -1876,7 +1879,7 @@ function ChatTab({
           </div>
 
           {limitReached ? (
-            <div className="brutal-alert flex flex-col gap-3 p-4 text-sm uppercase tracking-[0.12em]">
+            <div className="brutal-alert flex flex-col gap-3 p-4 text-sm leading-relaxed">
               <p className="text-white">
                 You burned through today&apos;s free chat budget. Read-only
                 still works. Upgrade if you want more messages right now.
@@ -1894,14 +1897,17 @@ function ChatTab({
           ) : null}
 
           {errorMessage ? (
-            <div className="brutal-alert p-4 text-sm uppercase tracking-[0.12em]">
+            <div className="brutal-alert p-4 text-sm leading-relaxed">
               {errorMessage}
             </div>
           ) : null}
 
-          <div className="max-h-112 overflow-y-auto border-2 border-black bg-background px-4 pr-1">
+          <div
+            ref={scrollContainerRef}
+            className="max-h-112 overflow-y-auto border-2 border-black bg-background px-4 pr-1"
+          >
             {sortedMessages.length === 0 ? (
-              <div className="border-b border-dashed border-black py-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+              <div className="border-b border-dashed border-black py-4 text-sm leading-relaxed text-muted-foreground">
                 No messages yet. Start clean, explain the miss, or force a plan
                 before today drifts.
               </div>
@@ -1927,7 +1933,6 @@ function ChatTab({
                 <p className="leading-7 text-foreground">{message.content}</p>
               </div>
             ))}
-            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -1949,6 +1954,14 @@ function ChatTab({
             <Textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (!sending && input.trim() && !limitReached) {
+                    void onSend(input);
+                  }
+                }
+              }}
               className="min-h-24"
               disabled={limitReached}
               placeholder={
@@ -3133,7 +3146,7 @@ export function DashboardShell() {
     }
 
     seededWelcome.current = true;
-    const upcoming = habits?.find((habit) =>
+    const upcoming = habits?.find((habit: HabitDoc) =>
       habit.targetDays.includes(todayKey),
     );
     void createMessage({
@@ -3275,13 +3288,17 @@ export function DashboardShell() {
   const resolvedMessageBudgetStatus = messageBudgetStatus ?? null;
   const latestWeeklyReport = resolvedWeeklyReports[0] ?? null;
   const selectedHabit =
-    resolvedHabits.find((habit) => habit._id === selectedHabitId) ?? null;
+    resolvedHabits.find((habit: HabitDoc) => habit._id === selectedHabitId) ??
+    null;
   const reminderMessages = resolvedMessages.filter(
-    (message) => message.role === "ai" && isReminderIntent(message.intent),
+    (message: MessageDoc) =>
+      message.role === "ai" && isReminderIntent(message.intent),
   );
   const latestReminderTimestamp =
     reminderMessages.length > 0
-      ? Math.max(...reminderMessages.map((message) => message.timestamp))
+      ? Math.max(
+          ...reminderMessages.map((message: MessageDoc) => message.timestamp),
+        )
       : 0;
   const hasUnreadReminder = latestReminderTimestamp > lastSeenReminderTimestamp;
   const notificationsEnabled =
@@ -3294,7 +3311,7 @@ export function DashboardShell() {
   );
   const habitSnapshots = useMemo(
     () =>
-      resolvedHabits.map((habit) =>
+      resolvedHabits.map((habit: HabitDoc) =>
         getHabitPressureSnapshot(
           habit,
           todayKey,
@@ -3336,7 +3353,7 @@ export function DashboardShell() {
     }
 
     const stillExists = resolvedHabits.some(
-      (habit) => habit._id === selectedHabitId,
+      (habit: HabitDoc) => habit._id === selectedHabitId,
     );
     if (!stillExists) {
       setSelectedHabitId(null);
@@ -3395,7 +3412,7 @@ export function DashboardShell() {
     if (!convexUser || !habit) return;
 
     const existing = resolvedTodayCheckIns.find(
-      (entry) => entry.habitId === habit._id,
+      (entry: Doc<"checkIns">) => entry.habitId === habit._id,
     );
     if (existing) return;
 
@@ -3429,10 +3446,16 @@ export function DashboardShell() {
   }
 
   async function handleMarkComplete(habit: HabitDoc) {
+    if (typeof window !== "undefined" && navigator.vibrate) {
+      navigator.vibrate([100, 50, 100]); // Haptic dopamine stamp
+    }
     await logCheckInStatus(habit, "completed", "dashboard_quick");
   }
 
   async function handleLogMiss(habit: HabitDoc) {
+    if (typeof window !== "undefined" && navigator.vibrate) {
+      navigator.vibrate([200]); // Heavy single vibration for failure
+    }
     await logCheckInStatus(habit, "missed", "dashboard_quick");
   }
 

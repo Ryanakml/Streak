@@ -8,6 +8,8 @@ import {
   query,
 } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
+import { pickMemorySignal, selectMemorySnapshot } from "./agentMemory";
 
 const LOOKAHEAD_DAYS = 7;
 const REMINDER_MESSAGE_INTENT = {
@@ -162,6 +164,7 @@ function buildReminderContext(args: {
   allCheckIns: Doc<"checkIns">[];
   todayReminders: Doc<"reminders">[];
   timezone: string;
+  memorySignal: string | null;
 }) {
   const habitCheckIns = args.allCheckIns
     .filter((checkIn) => checkIn.habitId === args.habit._id)
@@ -199,6 +202,7 @@ function buildReminderContext(args: {
     missedLast7d,
     lastCheckInStatus: lastCheckIn?.status ?? null,
     recentMissReasons,
+    memorySignal: args.memorySignal,
     todayReminderStatus: {
       pendingTypes: habitTodayReminders
         .filter((reminder) => !reminder.sent)
@@ -220,9 +224,11 @@ function buildReminderCopy(params: {
   const streakSignal = summarizeStreak(params.context.currentStreak);
   const missSignal = summarizeMissTrend(params.context.missedLast7d);
   const recentReason = params.context.recentMissReasons[0] ?? "";
+  const memorySignal = params.context.memorySignal ?? "";
 
   if (params.type === "pre_workout") {
     const bodyLead =
+      memorySignal ||
       streakSignal ||
       missSignal ||
       `${params.habit.name} is coming up. You ready or already making excuses?`;
@@ -239,12 +245,14 @@ function buildReminderCopy(params: {
 
   if (params.type === "check_in") {
     const bodyLead =
-      params.context.lastCheckInStatus === "missed"
+      memorySignal ||
+      (params.context.lastCheckInStatus === "missed"
         ? `${params.habit.name} is up. Don't repeat the last miss.`
-        : `It's check-in time for ${params.habit.name}. Did you do it?`;
+        : `It's check-in time for ${params.habit.name}. Did you do it?`);
     const contentTail =
       missSignal ||
       streakSignal ||
+      memorySignal ||
       "Answer clean: did you do it or are you dodging it?";
 
     return {
@@ -255,6 +263,7 @@ function buildReminderCopy(params: {
   }
 
   const lateLead =
+    memorySignal ||
     missSignal ||
     streakSignal ||
     `${params.habit.name} is past the ${params.deadline} deadline. That's an automatic miss.`;
@@ -464,6 +473,15 @@ export const processReminder = internalMutation({
       .query("checkIns")
       .withIndex("by_user_date", (q) => q.eq("userId", reminder.userId))
       .collect();
+    const recentEpisodes = await ctx.db
+      .query("agentEpisodes")
+      .withIndex("by_user_date", (q) => q.eq("userId", reminder.userId))
+      .order("desc")
+      .take(12);
+    const memoryRows = await ctx.db
+      .query("agentMemory")
+      .withIndex("by_user_scope", (q) => q.eq("userId", reminder.userId))
+      .collect();
     const todayReminders = await ctx.db
       .query("reminders")
       .withIndex("by_user", (q) => q.eq("userId", reminder.userId))
@@ -473,6 +491,11 @@ export const processReminder = internalMutation({
       timezone,
     );
     const schedule = getDaySchedule(habit, dayKey);
+    const memorySnapshot = selectMemorySnapshot({
+      memories: memoryRows,
+      episodes: recentEpisodes,
+      habitId: habit._id,
+    });
     const reminderContext = buildReminderContext({
       habit,
       reminder,
@@ -481,6 +504,7 @@ export const processReminder = internalMutation({
         (entry) => entry.date === reminder.date,
       ),
       timezone,
+      memorySignal: pickMemorySignal(memorySnapshot),
     });
     const copy = buildReminderCopy({
       habit,
@@ -508,6 +532,18 @@ export const processReminder = internalMutation({
 
       await ctx.db.patch(habit._id, { currentStreak: 0 });
       aiContent = `${copy.content} Reset and show up on the next scheduled day.`;
+      await ctx.runMutation(internal.agentMemory.recordEpisode, {
+        userId: user._id,
+        habitId: habit._id,
+        date: reminder.date,
+        type: "reminder_ignored",
+        summary: `${habit.name} was ignored until deadline and became an automatic miss.`,
+        metadata: {
+          reminderType: reminder.type,
+          deadline: schedule.checkInDeadline,
+        },
+        createdAt: reminder.scheduledFor,
+      });
     }
 
     const messageId = await ctx.db.insert("messages", {
