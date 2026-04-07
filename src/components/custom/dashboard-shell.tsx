@@ -620,9 +620,8 @@ function OnboardingFlow({
               </div>
 
               <div className="border-2 border-dashed border-black bg-background p-6 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                Coach Mode and other personalities can layer on later. Right now
-                the app ships with the brutal coach only, exactly like your
-                spec.
+                You will start with Brutal Mode. More coach styles can be added
+                later.
               </div>
 
               <div className="flex justify-end">

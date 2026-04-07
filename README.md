@@ -23,20 +23,20 @@ Streak is built for people who do not just want a checkbox habit tracker. The co
 
 1. Visit the landing page at `/`.
 2. Sign in or sign up through Clerk.
-3. Complete onboarding by choosing the current coach mode and creating the first habit.
+3. Complete onboarding by choosing your coach style and creating the first habit.
 4. Land on the dashboard at `/dashboard`.
 5. Use the Home tab to see today's pressure state and quick actions.
 6. Use the Chat tab to talk to the AI coach, log outcomes, explain misses, ask for planning help, or respond to reminders.
 7. Use the Stats tab to review the current week, recent logs, streaks, misses, and weekly review output.
-8. Use the Profile tab to manage account state, theme, notifications, and dev-mode billing tier.
+8. Use the Profile tab to manage account state, theme, notifications, and your billing tier.
 
 ### Main Screens
 
-| Screen | Route | Purpose |
-| --- | --- | --- |
-| Landing | `/` | Public marketing and sign-in entry point. |
-| Sign in | `/sign-in` | Clerk sign-in UI. |
-| Sign up | `/sign-up` | Clerk sign-up UI. |
+| Screen    | Route        | Purpose                                                           |
+| --------- | ------------ | ----------------------------------------------------------------- |
+| Landing   | `/`          | Public marketing and sign-in entry point.                         |
+| Sign in   | `/sign-in`   | Clerk sign-in UI.                                                 |
+| Sign up   | `/sign-up`   | Clerk sign-up UI.                                                 |
 | Dashboard | `/dashboard` | Authenticated app shell with Home, Chat, Stats, and Profile tabs. |
 
 ### Habit Setup
@@ -107,7 +107,7 @@ The Profile tab includes:
 - Remaining daily messages.
 - Reminder notification status.
 - Theme mode.
-- Dev-mode upgrade and downgrade controls.
+- Upgrade and downgrade controls.
 - Enable reminders button for browser push notifications.
 
 ### Reminders And Notifications
@@ -142,7 +142,7 @@ Push notifications use:
 
 ### Billing Status
 
-Billing is currently dev-mode only.
+Billing is currently handled through the app's existing billing flow.
 
 - Clerk public metadata stores `subscriptionTier`.
 - Convex syncs that tier into `users.subscriptionTier`.
@@ -168,18 +168,18 @@ See `docs/phase/phase-4-verification-results.md` for the detailed verification n
 
 ### Tech Stack
 
-| Area | Tooling |
-| --- | --- |
-| App framework | Next.js `16.2.2` with App Router |
-| React | React `19.2.4` |
-| Language | TypeScript |
-| Auth | Clerk |
-| Backend/database | Convex |
-| AI providers | Gemini, Groq, and DigitalOcean Inference fallback for server-side actions |
-| Styling | Tailwind CSS v4, custom UI components, Base UI, shadcn-style component structure |
-| Animation | GSAP, Framer Motion, Motion |
-| Push notifications | `web-push`, service worker, Push API |
-| Package manager | npm, because `package-lock.json` is present |
+| Area               | Tooling                                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| App framework      | Next.js `16.2.2` with App Router                                                 |
+| React              | React `19.2.4`                                                                   |
+| Language           | TypeScript                                                                       |
+| Auth               | Clerk                                                                            |
+| Backend/database   | Convex                                                                           |
+| AI providers       | Gemini, Groq, and DigitalOcean Inference fallback for server-side actions        |
+| Styling            | Tailwind CSS v4, custom UI components, Base UI, shadcn-style component structure |
+| Animation          | GSAP, Framer Motion, Motion                                                      |
+| Push notifications | `web-push`, service worker, Push API                                             |
+| Package manager    | npm, because `package-lock.json` is present                                      |
 
 ### Next.js Version Warning
 
@@ -243,41 +243,41 @@ Important installed-version notes already confirmed from the local docs:
 
 ### Key Frontend Files
 
-| File | Purpose |
-| --- | --- |
-| `src/app/layout.tsx` | Root layout. Wraps Clerk, Convex, theme provider, metadata, and global CSS. |
-| `src/app/page.tsx` | Public landing page entry. |
-| `src/app/(auth)/sign-in/[[...sign-in]]/page.tsx` | Clerk sign-in page. |
-| `src/app/(auth)/sign-up/[[...sign-up]]/page.tsx` | Clerk sign-up page. |
-| `src/app/(protected)/dashboard/page.tsx` | Auth-protected dashboard route. |
-| `src/proxy.ts` | Clerk request proxy for `/dashboard`. |
-| `src/components/custom/dashboard-shell.tsx` | Main authenticated app UI and client-side orchestration. |
-| `src/components/custom/landing.tsx` | Public landing page component. |
-| `src/components/custom/convex-client-provider.tsx` | Connects Convex React client to Clerk auth. |
-| `src/lib/convex.ts` | Creates `ConvexReactClient` from `NEXT_PUBLIC_CONVEX_URL`. |
-| `public/reminder-sw.js` | Service worker for push reminder display and notification click routing. |
+| File                                               | Purpose                                                                     |
+| -------------------------------------------------- | --------------------------------------------------------------------------- |
+| `src/app/layout.tsx`                               | Root layout. Wraps Clerk, Convex, theme provider, metadata, and global CSS. |
+| `src/app/page.tsx`                                 | Public landing page entry.                                                  |
+| `src/app/(auth)/sign-in/[[...sign-in]]/page.tsx`   | Clerk sign-in page.                                                         |
+| `src/app/(auth)/sign-up/[[...sign-up]]/page.tsx`   | Clerk sign-up page.                                                         |
+| `src/app/(protected)/dashboard/page.tsx`           | Auth-protected dashboard route.                                             |
+| `src/proxy.ts`                                     | Clerk request proxy for `/dashboard`.                                       |
+| `src/components/custom/dashboard-shell.tsx`        | Main authenticated app UI and client-side orchestration.                    |
+| `src/components/custom/landing.tsx`                | Public landing page component.                                              |
+| `src/components/custom/convex-client-provider.tsx` | Connects Convex React client to Clerk auth.                                 |
+| `src/lib/convex.ts`                                | Creates `ConvexReactClient` from `NEXT_PUBLIC_CONVEX_URL`.                  |
+| `public/reminder-sw.js`                            | Service worker for push reminder display and notification click routing.    |
 
 ### Key Convex Files
 
-| File | Purpose |
-| --- | --- |
-| `convex/schema.ts` | Database schema and indexes. |
-| `convex/users.ts` | Clerk-to-Convex user sync, profile update, and daily message budget. |
-| `convex/habits.ts` | Habit CRUD and reminder refresh scheduling. |
-| `convex/checkIns.ts` | Completion, miss, and bonus check-in records. |
-| `convex/workoutLogs.ts` | Structured workout logs attached to check-ins. |
-| `convex/messages.ts` | Stored chat messages. |
-| `convex/chat.ts` | Internal chat context and persistence helpers. |
-| `convex/chatAction.ts` | AI chat action, intent handling, operational commands, and side effects. |
-| `convex/agentActions.ts` | Auditable internal operational actions such as log completion, log miss, reschedule, skip, and planning helpers. |
-| `convex/agentMemory.ts` | Agent episodes and rolling memory summaries. |
-| `convex/reminders.ts` | Reminder queue, reminder run state machine, reminder copy, and due reminder processing mutation. |
-| `convex/notifications.ts` | Push subscription CRUD. |
-| `convex/notificationsAction.ts` | Node action that sends web push notifications. |
-| `convex/weeklyReports.ts` | Weekly report data access and persistence. |
-| `convex/weeklyReviewAction.ts` | Weekly review generation and optional push delivery. |
-| `convex/crons.ts` | Convex cron jobs for reminders, weekly reviews, and daily memory refresh. |
-| `convex/devSeeds.ts` | Verification and demo seed helpers. |
+| File                            | Purpose                                                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `convex/schema.ts`              | Database schema and indexes.                                                                                     |
+| `convex/users.ts`               | Clerk-to-Convex user sync, profile update, and daily message budget.                                             |
+| `convex/habits.ts`              | Habit CRUD and reminder refresh scheduling.                                                                      |
+| `convex/checkIns.ts`            | Completion, miss, and bonus check-in records.                                                                    |
+| `convex/workoutLogs.ts`         | Structured workout logs attached to check-ins.                                                                   |
+| `convex/messages.ts`            | Stored chat messages.                                                                                            |
+| `convex/chat.ts`                | Internal chat context and persistence helpers.                                                                   |
+| `convex/chatAction.ts`          | AI chat action, intent handling, operational commands, and side effects.                                         |
+| `convex/agentActions.ts`        | Auditable internal operational actions such as log completion, log miss, reschedule, skip, and planning helpers. |
+| `convex/agentMemory.ts`         | Agent episodes and rolling memory summaries.                                                                     |
+| `convex/reminders.ts`           | Reminder queue, reminder run state machine, reminder copy, and due reminder processing mutation.                 |
+| `convex/notifications.ts`       | Push subscription CRUD.                                                                                          |
+| `convex/notificationsAction.ts` | Node action that sends web push notifications.                                                                   |
+| `convex/weeklyReports.ts`       | Weekly report data access and persistence.                                                                       |
+| `convex/weeklyReviewAction.ts`  | Weekly review generation and optional push delivery.                                                             |
+| `convex/crons.ts`               | Convex cron jobs for reminders, weekly reviews, and daily memory refresh.                                        |
+| `convex/devSeeds.ts`            | Verification and demo seed helpers.                                                                              |
 
 ### Prerequisites
 
@@ -301,29 +301,29 @@ cp .env.example .env.local
 
 Fill in the values that apply to your local setup.
 
-| Variable | Used by | Notes |
-| --- | --- | --- |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Next.js and Convex auth config fallback | Public Clerk key. |
-| `CLERK_SECRET_KEY` | Next.js API routes | Needed for Clerk server APIs such as dev billing routes. |
-| `CLERK_ISSUER_URL` | Convex auth | Preferred issuer for Convex JWT validation. |
-| `CLERK_JWT_ISSUER_DOMAIN` | Convex auth | Supported fallback name used by `convex/auth.config.ts`. |
-| `CLERK_WEBHOOK_SECRET` | Future Clerk webhook work | Present in the example file, not a core current path. |
-| `CONVEX_DEPLOYMENT` | Convex CLI | Convex deployment identifier. |
-| `NEXT_PUBLIC_CONVEX_URL` | Next.js frontend and scripts | Required by `src/lib/convex.ts` and verification scripts. |
-| `NEXT_PUBLIC_CONVEX_SITE_URL` | Future/site integrations | Present in the example file. |
-| `GROQ_API_KEY` | Convex actions | Used by chat and weekly review actions. |
-| `GEMINI_API_KEY` | Convex actions | Used by chat and weekly review actions. |
-| `DIGITALOCEAN_MODEL_ACCESS_KEY` | Convex actions | Optional third fallback provider key for chat and weekly review generation. |
-| `DIGITALOCEAN_INFERENCE_MODEL` | Convex actions | Optional override for the DigitalOcean fallback model. Current verified model is `llama3.3-70b-instruct`. |
-| `DIGITALOCEAN_INFERENCE_BASE_URL` | Convex actions | Optional override for the DigitalOcean OpenAI-compatible inference endpoint. |
-| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | Browser client | Used when subscribing the browser to push notifications. |
-| `VAPID_PUBLIC_KEY` | Convex Node actions | Used by `web-push`. Should match the public browser key. |
-| `VAPID_PRIVATE_KEY` | Convex Node actions | Server-side VAPID private key. |
-| `VAPID_SUBJECT` | Convex Node actions | Usually a `mailto:` contact. |
-| `NEXT_PUBLIC_BILLING_MODE` | Billing migration marker | Current example value is `clerk_dev`. |
-| `POLAR_ACCESS_TOKEN` | Future Polar migration | Not required by current dev billing routes. |
-| `POLAR_ORGANIZATION_ID` | Future Polar migration | Not required by current dev billing routes. |
-| `POLAR_WEBHOOK_SECRET` | Future Polar migration | Not required by current dev billing routes. |
+| Variable                            | Used by                                 | Notes                                                                                                     |
+| ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Next.js and Convex auth config fallback | Public Clerk key.                                                                                         |
+| `CLERK_SECRET_KEY`                  | Next.js API routes                      | Needed for Clerk server APIs such as dev billing routes.                                                  |
+| `CLERK_ISSUER_URL`                  | Convex auth                             | Preferred issuer for Convex JWT validation.                                                               |
+| `CLERK_JWT_ISSUER_DOMAIN`           | Convex auth                             | Supported fallback name used by `convex/auth.config.ts`.                                                  |
+| `CLERK_WEBHOOK_SECRET`              | Future Clerk webhook work               | Present in the example file, not a core current path.                                                     |
+| `CONVEX_DEPLOYMENT`                 | Convex CLI                              | Convex deployment identifier.                                                                             |
+| `NEXT_PUBLIC_CONVEX_URL`            | Next.js frontend and scripts            | Required by `src/lib/convex.ts` and verification scripts.                                                 |
+| `NEXT_PUBLIC_CONVEX_SITE_URL`       | Future/site integrations                | Present in the example file.                                                                              |
+| `GROQ_API_KEY`                      | Convex actions                          | Used by chat and weekly review actions.                                                                   |
+| `GEMINI_API_KEY`                    | Convex actions                          | Used by chat and weekly review actions.                                                                   |
+| `DIGITALOCEAN_MODEL_ACCESS_KEY`     | Convex actions                          | Optional third fallback provider key for chat and weekly review generation.                               |
+| `DIGITALOCEAN_INFERENCE_MODEL`      | Convex actions                          | Optional override for the DigitalOcean fallback model. Current verified model is `llama3.3-70b-instruct`. |
+| `DIGITALOCEAN_INFERENCE_BASE_URL`   | Convex actions                          | Optional override for the DigitalOcean OpenAI-compatible inference endpoint.                              |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY`      | Browser client                          | Used when subscribing the browser to push notifications.                                                  |
+| `VAPID_PUBLIC_KEY`                  | Convex Node actions                     | Used by `web-push`. Should match the public browser key.                                                  |
+| `VAPID_PRIVATE_KEY`                 | Convex Node actions                     | Server-side VAPID private key.                                                                            |
+| `VAPID_SUBJECT`                     | Convex Node actions                     | Usually a `mailto:` contact.                                                                              |
+| `NEXT_PUBLIC_BILLING_MODE`          | Billing migration marker                | Current example value is `clerk_dev`.                                                                     |
+| `POLAR_ACCESS_TOKEN`                | Future Polar migration                  | Not required by current dev billing routes.                                                               |
+| `POLAR_ORGANIZATION_ID`             | Future Polar migration                  | Not required by current dev billing routes.                                                               |
+| `POLAR_WEBHOOK_SECRET`              | Future Polar migration                  | Not required by current dev billing routes.                                                               |
 
 Do not commit real secrets. Next.js loads `.env.local` from the project root. Convex server-side runtime variables also need to be configured for the Convex deployment that runs the actions.
 
@@ -355,21 +355,21 @@ http://localhost:3000
 
 ### Available Scripts
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start the Next.js dev server. |
-| `npm run build` | Build the Next.js app. |
-| `npm run start` | Start the production Next.js server after a build. |
-| `npm run lint` | Run ESLint. |
-| `npm run seed:phase1` | Run Phase 1 verification seed helper. |
-| `npm run seed:phase2` | Run Phase 2 verification seed helper. |
-| `npm run seed:phase3` | Run Phase 3 verification seed helper. |
-| `npm run seed:phase4` | Run Phase 4 verification seed helper. |
-| `npm run seed:phase5` | Run Phase 5 verification seed helper. |
-| `npm run phase3:process-reminders` | Process Phase 3 reminder verification helper. |
-| `npm run phase3:refresh-memory` | Refresh Phase 3 memory verification helper. |
-| `npm run phase4:process-reminders` | Process Phase 4 reminder verification helper. |
-| `npm run phase5:process-reminders` | Process Phase 5 reminder verification helper. |
+| Command                            | Purpose                                            |
+| ---------------------------------- | -------------------------------------------------- |
+| `npm run dev`                      | Start the Next.js dev server.                      |
+| `npm run build`                    | Build the Next.js app.                             |
+| `npm run start`                    | Start the production Next.js server after a build. |
+| `npm run lint`                     | Run ESLint.                                        |
+| `npm run seed:phase1`              | Run Phase 1 verification seed helper.              |
+| `npm run seed:phase2`              | Run Phase 2 verification seed helper.              |
+| `npm run seed:phase3`              | Run Phase 3 verification seed helper.              |
+| `npm run seed:phase4`              | Run Phase 4 verification seed helper.              |
+| `npm run seed:phase5`              | Run Phase 5 verification seed helper.              |
+| `npm run phase3:process-reminders` | Process Phase 3 reminder verification helper.      |
+| `npm run phase3:refresh-memory`    | Refresh Phase 3 memory verification helper.        |
+| `npm run phase4:process-reminders` | Process Phase 4 reminder verification helper.      |
+| `npm run phase5:process-reminders` | Process Phase 5 reminder verification helper.      |
 
 The verification helper scripts load `.env.local` and require `NEXT_PUBLIC_CONVEX_URL`. Seed scripts usually also require a target user, for example:
 
@@ -433,23 +433,23 @@ Keep this contract when replacing dev billing with Polar later.
 
 ### Data Model Overview
 
-| Table | Purpose |
-| --- | --- |
-| `users` | Clerk-linked user profile, timezone, coach mode, plan tier, and chat budget. |
-| `habits` | Habit definitions, schedule, rules, motivation, streaks, and active state. |
-| `checkIns` | Logged outcomes for a habit on a date. |
-| `workoutLogs` | Structured workout detail connected to check-ins. |
-| `messages` | User and AI chat messages. |
-| `reminders` | Delivery queue for reminder events. |
-| `reminderRuns` | Stateful reminder journey for a single `habit x date`. |
-| `pushSubscriptions` | Browser push endpoints and keys. |
-| `weeklyReports` | Generated weekly review summaries. |
-| `agentActionLogs` | Audit trail for operational agent actions. |
-| `habitSkips` | Explicit skipped dates. |
-| `agentPendingActions` | Clarification-required actions waiting for user input. |
-| `agentTasks` | Lightweight planner task records. |
-| `agentEpisodes` | Important events used by agent memory. |
-| `agentMemory` | Rolling global or habit-specific memory summaries. |
+| Table                 | Purpose                                                                      |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `users`               | Clerk-linked user profile, timezone, coach mode, plan tier, and chat budget. |
+| `habits`              | Habit definitions, schedule, rules, motivation, streaks, and active state.   |
+| `checkIns`            | Logged outcomes for a habit on a date.                                       |
+| `workoutLogs`         | Structured workout detail connected to check-ins.                            |
+| `messages`            | User and AI chat messages.                                                   |
+| `reminders`           | Delivery queue for reminder events.                                          |
+| `reminderRuns`        | Stateful reminder journey for a single `habit x date`.                       |
+| `pushSubscriptions`   | Browser push endpoints and keys.                                             |
+| `weeklyReports`       | Generated weekly review summaries.                                           |
+| `agentActionLogs`     | Audit trail for operational agent actions.                                   |
+| `habitSkips`          | Explicit skipped dates.                                                      |
+| `agentPendingActions` | Clarification-required actions waiting for user input.                       |
+| `agentTasks`          | Lightweight planner task records.                                            |
+| `agentEpisodes`       | Important events used by agent memory.                                       |
+| `agentMemory`         | Rolling global or habit-specific memory summaries.                           |
 
 ### Verification Docs
 
@@ -473,13 +473,13 @@ Useful current files:
 
 ### Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `Missing NEXT_PUBLIC_CONVEX_URL` | Frontend cannot create the Convex client. | Set `NEXT_PUBLIC_CONVEX_URL` in `.env.local` and restart `npm run dev`. |
-| Dashboard stays on account sync | Clerk user exists but Convex `users` record is missing or sync failed. | Check Clerk auth state, Convex dev logs, and `api.users.syncUser`. |
-| Convex auth fails | Clerk issuer is missing or incorrect. | Set `CLERK_ISSUER_URL` or `CLERK_JWT_ISSUER_DOMAIN` for the Convex deployment. |
-| Chat fails | AI provider key missing, provider quota exhausted, or Convex action error. | Check `GEMINI_API_KEY`, `GROQ_API_KEY`, optional `DIGITALOCEAN_MODEL_ACCESS_KEY`, and Convex logs. |
-| Free chat cap error | Free user hit the 20-message local-day limit. | Wait for local-day reset or use the dev Pro upgrade route. |
-| Notifications stay disabled | Browser permission, service worker, Push API, or VAPID key issue. | Check browser support, permission state, `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, and Convex VAPID env values. |
-| Reminders do not send | Convex crons, queue data, or push subscriptions are missing. | Check `reminders`, `reminderRuns`, `pushSubscriptions`, and `process-due-reminders` logs. |
-| Dev billing does not update | Clerk server API or metadata reload failed. | Check `CLERK_SECRET_KEY`, route handler logs, and whether `user.reload()` completed. |
+| Symptom                          | Likely cause                                                               | Fix                                                                                                   |
+| -------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `Missing NEXT_PUBLIC_CONVEX_URL` | Frontend cannot create the Convex client.                                  | Set `NEXT_PUBLIC_CONVEX_URL` in `.env.local` and restart `npm run dev`.                               |
+| Dashboard stays on account sync  | Clerk user exists but Convex `users` record is missing or sync failed.     | Check Clerk auth state, Convex dev logs, and `api.users.syncUser`.                                    |
+| Convex auth fails                | Clerk issuer is missing or incorrect.                                      | Set `CLERK_ISSUER_URL` or `CLERK_JWT_ISSUER_DOMAIN` for the Convex deployment.                        |
+| Chat fails                       | AI provider key missing, provider quota exhausted, or Convex action error. | Check `GEMINI_API_KEY`, `GROQ_API_KEY`, optional `DIGITALOCEAN_MODEL_ACCESS_KEY`, and Convex logs.    |
+| Free chat cap error              | Free user hit the 20-message local-day limit.                              | Wait for local-day reset or use the dev Pro upgrade route.                                            |
+| Notifications stay disabled      | Browser permission, service worker, Push API, or VAPID key issue.          | Check browser support, permission state, `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, and Convex VAPID env values. |
+| Reminders do not send            | Convex crons, queue data, or push subscriptions are missing.               | Check `reminders`, `reminderRuns`, `pushSubscriptions`, and `process-due-reminders` logs.             |
+| Dev billing does not update      | Clerk server API or metadata reload failed.                                | Check `CLERK_SECRET_KEY`, route handler logs, and whether `user.reload()` completed.                  |

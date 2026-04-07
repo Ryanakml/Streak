@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "url";
 import { ConvexHttpClient } from "convex/browser";
 
 function loadEnvFile(filePath) {
@@ -40,7 +41,10 @@ function getArg(flag) {
   return process.argv[index + 1] ?? null;
 }
 
-const rootDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const rootDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 loadEnvFile(path.join(rootDir, ".env.local"));
 
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -68,4 +72,6 @@ const result = await client.mutation("devSeeds:seedPhase5Verification", {
 
 console.log(JSON.stringify(result, null, 2));
 console.log("\nNext:");
-console.log("- Run planner/task cases from docs/phase/phase-5-verification-test-plan.md");
+console.log(
+  "- Run planner/task cases from docs/phase/phase-5-verification-test-plan.md",
+);
