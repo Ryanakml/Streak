@@ -106,6 +106,39 @@ export default defineSchema({
     .index("by_habit", ["habitId", "sent"])
     .index("by_scheduled", ["sent", "scheduledFor"]),
 
+  reminderRuns: defineTable({
+    userId: v.id("users"),
+    habitId: v.id("habits"),
+    date: v.string(),
+    state: v.union(
+      v.literal("scheduled"),
+      v.literal("pre_reminded"),
+      v.literal("user_acknowledged"),
+      v.literal("user_hesitant"),
+      v.literal("ignored_once"),
+      v.literal("completed"),
+      v.literal("missed"),
+      v.literal("rescheduled"),
+      v.literal("skipped"),
+    ),
+    lastReminderType: v.optional(
+      v.union(
+        v.literal("pre_workout"),
+        v.literal("check_in"),
+        v.literal("late_follow_up"),
+      ),
+    ),
+    lastMessageId: v.optional(v.id("messages")),
+    userResponded: v.boolean(),
+    responseIntent: v.optional(v.string()),
+    responseSummary: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user_date", ["userId", "date"])
+    .index("by_habit_date", ["habitId", "date"])
+    .index("by_user_habit_date", ["userId", "habitId", "date"]),
+
   pushSubscriptions: defineTable({
     userId: v.id("users"),
     endpoint: v.string(),
@@ -184,6 +217,24 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
 
+  agentTasks: defineTable({
+    userId: v.id("users"),
+    title: v.string(),
+    date: v.string(),
+    time: v.optional(v.string()),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("done"),
+      v.literal("cancelled"),
+    ),
+    source: v.literal("chat"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user_date", ["userId", "date"])
+    .index("by_user_status", ["userId", "status"])
+    .index("by_user_date_status", ["userId", "date", "status"]),
+
   agentEpisodes: defineTable({
     userId: v.id("users"),
     habitId: v.optional(v.id("habits")),
@@ -207,4 +258,38 @@ export default defineSchema({
   })
     .index("by_user_scope", ["userId", "scope"])
     .index("by_user_habit_scope", ["userId", "habitId", "scope"]),
+
+  agentModelRuns: defineTable({
+    userId: v.id("users"),
+    habitId: v.optional(v.id("habits")),
+    messageId: v.optional(v.id("messages")),
+    userMessageId: v.optional(v.id("messages")),
+    aiMessageId: v.optional(v.id("messages")),
+    userMessageContent: v.optional(v.string()),
+    aiMessageContent: v.optional(v.string()),
+    source: v.union(
+      v.literal("chat"),
+      v.literal("weekly_review"),
+      v.literal("reminder"),
+      v.literal("system"),
+    ),
+    purpose: v.string(),
+    finalProvider: v.string(),
+    finalModel: v.string(),
+    fallbackDepth: v.number(),
+    attempts: v.array(
+      v.object({
+        provider: v.string(),
+        model: v.string(),
+        attemptOrder: v.number(),
+        status: v.union(v.literal("success"), v.literal("failed")),
+        errorSummary: v.optional(v.string()),
+      }),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_user_createdAt", ["userId", "createdAt"])
+    .index("by_user_message", ["userMessageId"])
+    .index("by_ai_message", ["aiMessageId"])
+    .index("by_source_createdAt", ["source", "createdAt"]),
 });

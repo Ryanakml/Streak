@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -32,7 +32,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -341,7 +340,7 @@ function WeekGrid({
   referenceDate: Date;
 }) {
   return (
-    <div className="grid grid-cols-2 border-2 border-black sm:grid-cols-4 lg:grid-cols-7">
+    <div className="flex flex-wrap gap-2">
       {weekDays.map((day) => {
         const state = getWeeklyCellState(
           habit,
@@ -363,37 +362,20 @@ function WeekGrid({
         return (
           <div
             key={`${habit._id}-${day.dateKey}`}
-            className={`border-b-2 border-r-2 border-black p-3 text-left lg:last:border-r-0 ${
+            title={`${formatWorkoutDate(day.date.getTime())}: ${label}`}
+            className={`flex h-10 w-10 items-center justify-center border-2 uppercase font-bold ${
               state === "missed"
-                ? "bg-[#DF3B23] text-white"
+                ? "bg-[#DF3B23] text-white border-black"
                 : state === "completed"
-                  ? "bg-black text-white"
+                  ? "bg-black text-white border-black"
                   : state === "bonus"
-                    ? "bg-secondary text-foreground"
-                    : "bg-background text-foreground"
+                    ? "bg-secondary text-foreground border-black"
+                    : state === "scheduled"
+                      ? "bg-background text-foreground border-dashed border-black"
+                      : "bg-background text-muted-foreground border-black/20"
             }`}
           >
-            <p
-              className={`text-[10px] font-black uppercase tracking-[0.24em] ${
-                state === "missed" || state === "completed"
-                  ? "text-white/80"
-                  : "text-muted-foreground"
-              }`}
-            >
-              {day.label}
-            </p>
-            <div className="mt-3 inline-flex border-2 border-current px-2 py-1 text-[10px] font-black uppercase tracking-[0.18em]">
-              {label}
-            </div>
-            <p
-              className={`mt-4 text-xs uppercase tracking-[0.12em] ${
-                state === "missed" || state === "completed"
-                  ? "text-white"
-                  : "text-muted-foreground"
-              }`}
-            >
-              {formatWorkoutDate(day.date.getTime())}
-            </p>
+            <span className="text-[10px]">{day.label.charAt(0)}</span>
           </div>
         );
       })}
@@ -425,13 +407,15 @@ function HabitComposerDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        className={buttonVariants()}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => setOpen(true)}
         disabled={disabled}
       >
         <Plus />
         New Habit
-      </DialogTrigger>
+      </Button>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="text-3xl">Create Habit</DialogTitle>
@@ -980,11 +964,12 @@ function getHabitPressureSnapshot(
         : "No streak running",
     primaryActionLabel: "Open chat",
     chatPrompt: `How am I doing with ${habit.name}?`,
-    cardClassName: "bg-card text-foreground",
-    badgeClassName: "bg-background text-foreground border-black",
-    panelClassName: "border-black bg-background text-foreground",
-    panelToneClassName: "text-foreground",
-    emphasisClassName: "text-foreground",
+    cardClassName:
+      "bg-background text-muted-foreground opacity-60 border-2 border-black/30",
+    badgeClassName: "bg-background text-muted-foreground border-black/30",
+    panelClassName: "border-black/30 bg-background text-muted-foreground",
+    panelToneClassName: "text-muted-foreground",
+    emphasisClassName: "text-muted-foreground",
     countdownMinutes: null,
     deadlineProgress: scheduledToday ? deadlineProgress : null,
     urgencyLabel: "No active clock",
@@ -1019,11 +1004,11 @@ function getHabitPressureSnapshot(
           : "First clean log on record",
       primaryActionLabel: "Review with coach",
       chatPrompt: `Give me the readout for ${habit.name} after today's log.`,
-      cardClassName: "bg-black text-white",
-      badgeClassName: "bg-white text-black border-white",
-      panelClassName: "border-white/40 bg-white/10 text-white",
-      panelToneClassName: "text-white",
-      emphasisClassName: "text-white",
+      cardClassName: "bg-[#05120C] text-white",
+      badgeClassName: "bg-[#113A28] text-white border-[#113A28]",
+      panelClassName: "border-[#113A28] bg-[#0A2418] text-white",
+      panelToneClassName: "text-white/80",
+      emphasisClassName: "text-[#4CAF50]",
       countdownMinutes: null,
       deadlineProgress: 100,
       urgencyLabel: "Locked in",
@@ -1098,9 +1083,11 @@ function getHabitPressureSnapshot(
         minutesToDeadline <= 0
           ? `I am late on ${habit.name}. Help me recover the next session.`
           : `I am close to missing ${habit.name}. Keep me focused.`,
-      cardClassName: "bg-[#F2D6D1] text-foreground",
+      cardClassName:
+        "bg-background text-foreground border-[3px] border-[#DF3B23]",
       badgeClassName: "bg-[#DF3B23] text-white border-[#DF3B23]",
-      panelClassName: "border-[#DF3B23] bg-white text-foreground",
+      panelClassName:
+        "border-[2px] border-[#DF3B23] bg-background text-foreground",
       panelToneClassName: "text-foreground",
       emphasisClassName: "text-[#DF3B23]",
       countdownMinutes: minutesToDeadline,
@@ -1136,9 +1123,9 @@ function getHabitPressureSnapshot(
         : base.streakLabel,
       primaryActionLabel: "Check in now",
       chatPrompt: `Keep me on track for ${habit.name} today.`,
-      cardClassName: "bg-[#F4E9C9] text-foreground",
+      cardClassName: "bg-background text-foreground border-[3px] border-black",
       badgeClassName: "bg-black text-white border-black",
-      panelClassName: "border-black bg-white text-foreground",
+      panelClassName: "border-[2px] border-black bg-background text-foreground",
       panelToneClassName: "text-foreground",
       emphasisClassName: "text-foreground",
       countdownMinutes:
@@ -1171,7 +1158,7 @@ function getHabitPressureSnapshot(
         : base.streakLabel,
       primaryActionLabel: "Prep with coach",
       chatPrompt: `Set me up to hit ${habit.name} clean today.`,
-      cardClassName: "bg-card text-foreground",
+      cardClassName: "bg-background text-foreground",
       badgeClassName: "bg-background text-foreground border-black",
       panelClassName: "border-black bg-background text-foreground",
       panelToneClassName: "text-foreground",
@@ -1328,7 +1315,7 @@ function SummaryStatusCard({
             {snapshot ? <CountdownMeter snapshot={snapshot} compact /> : null}
           </div>
           <div className="text-right">
-            <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+            <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
               Daily status
             </p>
             <p className="mt-2 text-2xl font-black">
@@ -1356,7 +1343,7 @@ function SummaryStatusCard({
             </p>
             {snapshot ? (
               <div
-                className={`flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em] ${snapshot.panelToneClassName}`}
+                className={`flex flex-wrap gap-3 text-xs font-bold uppercase tracking-wider ${snapshot.panelToneClassName}`}
               >
                 <span>
                   {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
@@ -1504,13 +1491,13 @@ function HomeHabitCard({
 
           <div className="grid border-2 border-current/20 sm:grid-cols-3">
             <div className="border-b-2 border-r-0 border-current/20 p-4 sm:border-b-0 sm:border-r-2">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+              <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
                 Reminder
               </p>
               <p className="mt-3 text-2xl font-black">{habit.reminderTime}</p>
             </div>
             <div className="border-b-2 border-r-0 border-current/20 p-4 sm:border-b-0 sm:border-r-2">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+              <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
                 Deadline
               </p>
               <p className="mt-3 text-2xl font-black">
@@ -1518,7 +1505,7 @@ function HomeHabitCard({
               </p>
             </div>
             <div className="p-4">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
+              <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
                 Streak
               </p>
               <p className="mt-3 text-2xl font-black">
@@ -1528,28 +1515,37 @@ function HomeHabitCard({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <Button
-            type="button"
-            variant={state === "logged" ? "outline" : "default"}
-            disabled={!canMarkComplete}
-            onClick={() => {
-              if (
-                state === "deadline-risk" &&
-                snapshot.countdownMinutes !== null &&
-                snapshot.countdownMinutes <= 0
-              ) {
-                return onLogMiss(habit);
-              }
-              return onMarkComplete(habit);
-            }}
-          >
-            {state === "logged"
-              ? "Already logged"
-              : state === "missed"
-                ? "Miss recorded"
-                : snapshot.primaryActionLabel}
-          </Button>
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Button
+              type="button"
+              variant={state === "logged" ? "outline" : "default"}
+              disabled={!canMarkComplete}
+              onClick={() => {
+                if (
+                  state === "deadline-risk" &&
+                  snapshot.countdownMinutes !== null &&
+                  snapshot.countdownMinutes <= 0
+                ) {
+                  return onLogMiss(habit);
+                }
+                return onMarkComplete(habit);
+              }}
+            >
+              {state === "logged"
+                ? "Review Work"
+                : state === "missed"
+                  ? "Acknowledge Miss"
+                  : "CHECK IN"}
+            </Button>
+            {state === "deadline-risk" &&
+              snapshot.countdownMinutes !== null &&
+              snapshot.countdownMinutes <= 0 && (
+                <span className="text-[10px] font-bold text-[#DF3B23] uppercase tracking-wider">
+                  Will count as miss
+                </span>
+              )}
+          </div>
           <Button type="button" variant="outline" onClick={onOpenChat}>
             <MessageSquare />
             {state === "missed" ? "Reset in chat" : "Chat with coach"}
@@ -1558,11 +1554,15 @@ function HomeHabitCard({
 
         <div className="space-y-3 border-t-2 border-current/15 pt-5">
           <p className="text-sm leading-relaxed opacity-90">
-            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">Rules:</span>
+            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">
+              Rules:
+            </span>
             {habit.rules}
           </p>
           <p className="text-sm leading-relaxed opacity-90">
-            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">Motivation:</span>
+            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">
+              Motivation:
+            </span>
             {habit.motivation}
           </p>
           <div className="flex flex-wrap gap-2">
@@ -1753,7 +1753,8 @@ function ChatTab({
 
   useEffect(() => {
     if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      scrollContainerRef.current.scrollTop =
+        scrollContainerRef.current.scrollHeight;
     }
   }, [lastMessageId, sortedMessages.length]);
 
@@ -1916,7 +1917,7 @@ function ChatTab({
             {sortedMessages.map((message) => (
               <div
                 key={message._id}
-                className="border-b border-dashed border-black py-4 text-sm"
+                className={`border-b border-dashed border-black ${message.role === "ai" ? "bg-black/40 p-4 text-sm" : "py-4 text-sm"}`}
               >
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
                   <span
@@ -1930,7 +1931,11 @@ function ChatTab({
                   </span>
                   <span>{formatMessageTime(message.timestamp)}</span>
                 </div>
-                <p className="leading-7 text-foreground">{message.content}</p>
+                <p
+                  className={`leading-7 ${message.role === "ai" ? "font-bold text-foreground" : "text-foreground"}`}
+                >
+                  {message.content}
+                </p>
               </div>
             ))}
           </div>
@@ -2032,6 +2037,101 @@ function StatsTab({
       .slice(0, 3);
   }
 
+  const completedCount = weeklyCheckIns.filter(
+    (entry) => entry.status === "completed",
+  ).length;
+  const missedCount = weeklyCheckIns.filter(
+    (entry) => entry.status === "missed",
+  ).length;
+  const bonusCount = weeklyCheckIns.filter(
+    (entry) => entry.status === "bonus",
+  ).length;
+  const totalWeeklyTarget = activeHabits.reduce(
+    (acc, habit) => acc + habit.targetDays.length,
+    0,
+  );
+
+  const completedJudgement =
+    completedCount >= totalWeeklyTarget / 2 ? "Holding" : "Behind";
+  const missedJudgement = missedCount === 0 ? "Clean" : "You broke it";
+  const bonusJudgement = bonusCount > 0 ? "Pushed extra" : "Solid";
+
+  const todayStr = toDateKey(referenceDate);
+  const todayDayKey = getTodayKey(referenceDate);
+  const todayCheckIns = weeklyCheckIns.filter((c) => c.date === todayStr);
+
+  let missedTodayCount = 0;
+  let pendingTodayCount = 0;
+
+  activeHabits.forEach((habit) => {
+    const snapshot = getHabitPressureSnapshot(
+      habit,
+      todayDayKey,
+      todayStr,
+      todayCheckIns,
+      referenceDate,
+    );
+    if (
+      snapshot.state === "missed" ||
+      (snapshot.state === "deadline-risk" &&
+        (snapshot.countdownMinutes ?? 1) <= 0)
+    ) {
+      missedTodayCount++;
+    } else if (
+      ["upcoming", "due-soon", "deadline-risk"].includes(snapshot.state)
+    ) {
+      pendingTodayCount++;
+    }
+  });
+
+  const todayFocusLabel =
+    missedTodayCount > 0
+      ? `TODAY: ${missedTodayCount} MISS. FIX IT.`
+      : pendingTodayCount > 0
+        ? `TODAY: ${pendingTodayCount} PENDING.`
+        : "TODAY: ALL CLEAR";
+
+  let weekMisses = 0;
+
+  const boxes = weekDays.map((day) => {
+    const isFuture = day.dateKey > todayStr;
+    const isToday = day.dateKey === todayStr;
+
+    const scheduled = activeHabits.filter((h) =>
+      h.targetDays.includes(day.key),
+    );
+    if (scheduled.length === 0) return { day, status: "rest" as const };
+
+    let hasMiss = false;
+    let hasPending = false;
+    let completed = 0;
+
+    scheduled.forEach((habit) => {
+      const cellState = getWeeklyCellState(
+        habit,
+        day,
+        weeklyCheckIns,
+        referenceDate,
+      );
+      if (cellState === "missed") hasMiss = true;
+      else if (cellState === "scheduled") hasPending = true;
+      else if (cellState === "completed" || cellState === "bonus") completed++;
+    });
+
+    if (isToday && missedTodayCount > 0) hasMiss = true;
+    if (!isToday && hasPending) hasMiss = true;
+
+    if (hasMiss) {
+      weekMisses++;
+      return { day, status: "missed" as const };
+    }
+    if (isFuture) return { day, status: "future" as const };
+    if (isToday && hasPending) return { day, status: "pending" as const };
+    if (completed === scheduled.length && scheduled.length > 0)
+      return { day, status: "perfect" as const };
+    return { day, status: "rest" as const };
+  });
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -2040,63 +2140,114 @@ function StatsTab({
           Stats
         </h2>
         <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
-          Read-only weekly performance and recent workout logs from your live
-          data.
+          System performance feedback and recent workout logs.
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-2xl">This Week</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="border-2 border-black bg-background p-4">
-            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-              Active habits
-            </p>
-            <p className="mt-2 text-3xl font-black">{activeHabits.length}</p>
+      <div className="flex flex-col gap-6 border-b-2 border-black pb-8 pt-4">
+        <div className="space-y-1">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Today Focus
+          </p>
+          <h3
+            className={`text-4xl font-black uppercase tracking-[-0.05em] sm:text-5xl ${missedTodayCount > 0 ? "text-[#DF3B23]" : "text-foreground"}`}
+          >
+            {todayFocusLabel}
+          </h3>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {boxes.map(({ day, status }) => {
+              const isToday = day.dateKey === todayStr;
+              const style =
+                status === "missed"
+                  ? "bg-[#DF3B23] text-white border-black"
+                  : status === "perfect"
+                    ? "bg-black text-white border-black"
+                    : status === "pending"
+                      ? "bg-background text-foreground border-black border-[3px]"
+                      : status === "future"
+                        ? "bg-background text-transparent border-dashed border-black/30"
+                        : "bg-secondary text-transparent border-transparent";
+
+              const todayMarker = isToday
+                ? "ring-[3px] ring-foreground ring-offset-2 ring-offset-background"
+                : "";
+
+              return (
+                <div
+                  key={day.dateKey}
+                  className={`flex h-12 w-12 items-center justify-center border-2 font-bold uppercase ${style} ${todayMarker}`}
+                >
+                  <span className="text-xs">{day.label.charAt(0)}</span>
+                </div>
+              );
+            })}
           </div>
-          <div className="border-2 border-black bg-background p-4">
-            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-              Completed
-            </p>
-            <p className="mt-2 text-3xl font-black">
-              {
-                weeklyCheckIns.filter((entry) => entry.status === "completed")
-                  .length
-              }
-            </p>
-          </div>
-          <div className="border-2 border-black bg-background p-4">
-            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-              Missed
-            </p>
-            <p className="mt-2 text-3xl font-black">
-              {
-                weeklyCheckIns.filter((entry) => entry.status === "missed")
-                  .length
-              }
-            </p>
-          </div>
-          <div className="border-2 border-black bg-background p-4">
-            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-              Bonus
-            </p>
-            <p className="mt-2 text-3xl font-black">
-              {
-                weeklyCheckIns.filter((entry) => entry.status === "bonus")
-                  .length
-              }
-            </p>
-          </div>
-          <div className="border-2 border-black bg-background p-4">
-            <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-              Best streak
-            </p>
-            <p className="mt-2 text-3xl font-black">{bestStreak}</p>
-          </div>
-        </CardContent>
-      </Card>
+          <p className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+            THIS WEEK:{" "}
+            {weekMisses === 0
+              ? "CLEAN"
+              : `${weekMisses} MISS${weekMisses > 1 ? "ES" : ""}`}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div
+          className={`border-2 border-black bg-background p-5 ${missedCount === 0 ? "sm:col-span-2 xl:col-span-2" : ""}`}
+        >
+          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+            Best Streak
+          </p>
+          <p
+            className={`mt-2 font-black ${missedCount === 0 ? "text-5xl" : "text-4xl"}`}
+          >
+            {bestStreak}
+          </p>
+        </div>
+
+        <div
+          className={`border-2 p-5 ${missedCount > 0 ? "bg-background border-[#DF3B23] border-[3px] sm:col-span-2 xl:col-span-2" : "border-black bg-background"}`}
+        >
+          <p
+            className={`text-xs font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+          >
+            System Misses
+          </p>
+          <p
+            className={`mt-2 font-black ${missedCount > 0 ? "text-5xl text-[#DF3B23]" : "text-4xl text-foreground"}`}
+          >
+            {missedCount}
+          </p>
+          <p
+            className={`mt-3 text-[10px] font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+          >
+            {missedJudgement}
+          </p>
+        </div>
+
+        <div className="border-2 border-black bg-background p-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+            Completed
+          </p>
+          <p className="mt-2 text-4xl font-black">{completedCount}</p>
+          <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            {completedJudgement}
+          </p>
+        </div>
+
+        <div className="border-2 border-black bg-background p-5 sm:col-span-2 xl:col-span-4">
+          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+            Bonus
+          </p>
+          <p className="mt-2 text-4xl font-black">{bonusCount}</p>
+          <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            {bonusJudgement}
+          </p>
+        </div>
+      </div>
 
       {latestReport ? (
         <Card className="bg-secondary">
@@ -2790,7 +2941,24 @@ function ProfileTab({
   theme: "light" | "dark";
   onToggleTheme: () => void;
 }) {
-  const bestStreak = Math.max(0, ...habits.map((habit) => habit.bestStreak));
+  const activeHabits = habits.filter((habit) => habit.isActive);
+  const bestStreak = Math.max(
+    0,
+    ...activeHabits.map((habit) => habit.bestStreak),
+  );
+
+  const completedCount = weeklyStats.completed;
+  const missedCount = weeklyStats.missed;
+  const bonusCount = weeklyStats.bonus;
+  const totalWeeklyTarget = activeHabits.reduce(
+    (acc, habit) => acc + habit.targetDays.length,
+    0,
+  );
+
+  const completedJudgement =
+    completedCount >= totalWeeklyTarget / 2 ? "Holding" : "Behind";
+  const missedJudgement = missedCount === 0 ? "Clean" : "You broke it";
+  const bonusJudgement = bonusCount > 0 ? "Pushed extra" : "Solid";
 
   return (
     <div className="space-y-6">
@@ -2899,45 +3067,74 @@ function ProfileTab({
             <CardTitle className="text-2xl">Stats Readout</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <div className="border-2 border-black bg-background p-4">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Active habits
+            <div
+              className={`border-2 border-black bg-background p-5 ${missedCount === 0 ? "sm:col-span-2" : ""}`}
+            >
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Best Streak
               </p>
-              <p className="mt-2 text-3xl font-black">
-                {habits.filter((habit) => habit.isActive).length}
-              </p>
-            </div>
-            <div className="border-2 border-black bg-background p-4">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Best streak
-              </p>
-              <p className="mt-2 text-3xl font-black">{bestStreak}</p>
-            </div>
-            <div className="border-2 border-black bg-background p-4">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Week completed
-              </p>
-              <p className="mt-2 text-3xl font-black">
-                {weeklyStats.completed}
+              <p
+                className={`mt-2 font-black ${missedCount === 0 ? "text-5xl" : "text-4xl"}`}
+              >
+                {bestStreak}
               </p>
             </div>
-            <div className="border-2 border-black bg-background p-4">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Week missed
+
+            <div
+              className={`border-2 p-5 ${missedCount > 0 ? "bg-background border-[#DF3B23] border-[3px] sm:col-span-2" : "border-black bg-background"}`}
+            >
+              <p
+                className={`text-xs font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+              >
+                System Misses
               </p>
-              <p className="mt-2 text-3xl font-black">{weeklyStats.missed}</p>
+              <p
+                className={`mt-2 font-black ${missedCount > 0 ? "text-5xl text-[#DF3B23]" : "text-4xl text-foreground"}`}
+              >
+                {missedCount}
+              </p>
+              <p
+                className={`mt-3 text-[10px] font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+              >
+                {missedJudgement}
+              </p>
             </div>
-            <div className="border-2 border-black bg-background p-4">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Bonus sessions
+
+            <div className="border-2 border-black bg-background p-5">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Week Completed
               </p>
-              <p className="mt-2 text-3xl font-black">{weeklyStats.bonus}</p>
+              <p className="mt-2 text-4xl font-black">{completedCount}</p>
+              <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                {completedJudgement}
+              </p>
             </div>
-            <div className="border-2 border-black bg-background p-4">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Total logs
+
+            <div className="border-2 border-black bg-background p-5">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Bonus Sessions
               </p>
-              <p className="mt-2 text-3xl font-black">{checkIns.length}</p>
+              <p className="mt-2 text-4xl font-black">{bonusCount}</p>
+              <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                {bonusJudgement}
+              </p>
+            </div>
+
+            <div className="border-2 border-black bg-background p-5">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Active Habits
+              </p>
+              <p className="mt-2 text-4xl font-black">{activeHabits.length}</p>
+              <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Current targets
+              </p>
+            </div>
+
+            <div className="border-2 border-black bg-background p-5 sm:col-span-2">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Total Lifetime Logs
+              </p>
+              <p className="mt-2 text-4xl font-black">{checkIns.length}</p>
             </div>
           </CardContent>
         </Card>

@@ -6,12 +6,7 @@ import type { Doc } from "./_generated/dataModel";
 import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
-
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models";
-const GEMINI_MODEL = "gemini-2.5-flash";
+import { callModelTextWithFallbackTrace } from "./modelProvider";
 
 type WeeklyReason = {
   day: string;
@@ -110,149 +105,18 @@ function fallbackRoast(args: {
   )}% completion. That's not momentum, that's leakage. ${reasons}`;
 }
 
-async function callGroqText(
+async function callModelTextWithTrace(
   messages: Array<{ role: "system" | "user"; content: string }>,
 ) {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing GROQ_API_KEY for weekly review generation");
-  }
-
-  const response = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      temperature: 0.4,
-      messages,
-    }),
+  return await callModelTextWithFallbackTrace(messages, {
+    temperature: 0.4,
+    errorLabel: "Weekly review generation",
   });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `Groq request failed (${response.status}): ${body.slice(0, 400)}`,
-    );
-  }
-
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-
-  const content = payload.choices?.[0]?.message?.content?.trim();
-  if (!content) {
-    throw new Error(
-      "Groq weekly review response did not include message content",
-    );
-  }
-
-  return content;
-}
-
-function composeGeminiInput(
-  messages: Array<{ role: "system" | "user"; content: string }>,
-) {
-  const systemPrompt = messages
-    .filter((message) => message.role === "system")
-    .map((message) => message.content)
-    .join("\n\n")
-    .trim();
-  const userPrompt = messages
-    .filter((message) => message.role === "user")
-    .map((message) => message.content)
-    .join("\n\n")
-    .trim();
-
-  return {
-    systemPrompt,
-    userPrompt,
-  };
-}
-
-async function callGeminiText(
-  messages: Array<{ role: "system" | "user"; content: string }>,
-) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing GEMINI_API_KEY for weekly review generation");
-  }
-
-  const { systemPrompt, userPrompt } = composeGeminiInput(messages);
-  const response = await fetch(
-    `${GEMINI_API_URL}/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...(systemPrompt
-          ? {
-              systemInstruction: {
-                parts: [{ text: systemPrompt }],
-              },
-            }
-          : {}),
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: userPrompt }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.4,
-          responseMimeType: "text/plain",
-        },
-      }),
-    },
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `Gemini request failed (${response.status}): ${body.slice(0, 400)}`,
-    );
-  }
-
-  const payload = (await response.json()) as {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{ text?: string }>;
-      };
-    }>;
-  };
-
-  const content = payload.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text ?? "")
-    .join("")
-    .trim();
-  if (!content) {
-    throw new Error(
-      "Gemini weekly review response did not include message content",
-    );
-  }
-
-  return content;
-}
-
-async function callModelText(
-  messages: Array<{ role: "system" | "user"; content: string }>,
-) {
-  try {
-    return await callGeminiText(messages);
-  } catch (error) {
-    console.warn(
-      "Gemini weekly review call failed, falling back to Groq",
-      error,
-    );
-    return await callGroqText(messages);
-  }
 }
 
 async function generateRoast(args: {
+  ctx: ActionCtx;
+  userId: Doc<"users">["_id"];
   habit: Doc<"habits">;
   targetCount: number;
   actualCount: number;
@@ -261,7 +125,7 @@ async function generateRoast(args: {
   missedDaysReasons: WeeklyReason[];
 }) {
   try {
-    const roast = await callModelText([
+    const result = await callModelTextWithTrace([
       {
         role: "system",
         content:
@@ -283,7 +147,19 @@ async function generateRoast(args: {
       },
     ]);
 
-    return roast.trim();
+    await args.ctx.runMutation(internal.agentModelRuns.logModelRun, {
+      userId: args.userId,
+      habitId: args.habit._id,
+      source: "weekly_review",
+      purpose: "weekly_review_generation",
+      finalProvider: result.trace.finalProvider,
+      finalModel: result.trace.finalModel,
+      fallbackDepth: result.trace.fallbackDepth,
+      attempts: result.trace.attempts,
+      createdAt: Date.now(),
+    });
+
+    return result.content.trim();
   } catch {
     return fallbackRoast({
       habitName: args.habit.name,
@@ -417,6 +293,8 @@ async function generateReportsForUser(
     const completionRate =
       targetCount > 0 ? (actualCount / targetCount) * 100 : 0;
     const aiRoast = await generateRoast({
+      ctx,
+      userId: context.user._id,
       habit,
       targetCount,
       actualCount,

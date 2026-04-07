@@ -10,8 +10,12 @@
     "seed:phase1": "node scripts/seed-phase1-verification.mjs",
     "seed:phase2": "node scripts/seed-phase2-verification.mjs",
     "seed:phase3": "node scripts/seed-phase3-verification.mjs",
+    "seed:phase4": "node scripts/seed-phase4-verification.mjs",
+    "seed:phase5": "node scripts/seed-phase5-verification.mjs",
     "phase3:process-reminders": "node scripts/process-phase3-reminders.mjs",
-    "phase3:refresh-memory": "node scripts/refresh-phase3-memory.mjs"
+    "phase3:refresh-memory": "node scripts/refresh-phase3-memory.mjs",
+    "phase4:process-reminders": "node scripts/process-phase4-reminders.mjs",
+    "phase5:process-reminders": "node scripts/process-phase5-reminders.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
