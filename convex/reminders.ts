@@ -723,6 +723,14 @@ export const processReminder = internalMutation({
       return null;
     }
 
+    if (user.aiDisabled) {
+      await ctx.db.patch(reminder._id, { sent: true });
+      return {
+        shouldSendPush: false,
+        skipped: true,
+      };
+    }
+
     const existingCheckIns = await ctx.db
       .query("checkIns")
       .withIndex("by_user_date", (q) =>

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { api } from "../../../convex/_generated/api";
 import {
@@ -50,6 +50,7 @@ const DAYS = [
 ] as const;
 
 const ONBOARDING_PERSONALITY = "brutal" as const;
+const IS_DEV_MODE = process.env.NODE_ENV !== "production";
 
 type AppTab = "home" | "chat" | "stats" | "profile";
 type HabitDoc = Doc<"habits">;
@@ -2906,21 +2907,26 @@ function HabitDetailPanel({
 function ProfileTab({
   email,
   tier,
+  aiDisabled,
   budgetStatus,
   weeklyStats,
   habits,
   checkIns,
   billingPending,
+  aiTogglePending,
   notificationPermission,
   notificationsEnabled,
   notificationPending,
   onEnableNotifications,
-  onBillingChange,
+  onUpgrade,
+  onDowngrade,
+  onToggleAiDisabled,
   theme,
   onToggleTheme,
 }: {
   email: string;
   tier: "free" | "pro";
+  aiDisabled: boolean;
   budgetStatus: {
     dailyMessageCount: number;
     dailyMessageCap: number | null;
@@ -2932,11 +2938,14 @@ function ProfileTab({
   habits: HabitDoc[];
   checkIns: CheckInDoc[];
   billingPending: "free" | "pro" | null;
+  aiTogglePending: boolean;
   notificationPermission: NotificationPermissionState;
   notificationsEnabled: boolean;
   notificationPending: boolean;
   onEnableNotifications: () => Promise<void>;
-  onBillingChange: (tier: "free" | "pro") => Promise<void>;
+  onUpgrade: () => Promise<void>;
+  onDowngrade: () => Promise<void>;
+  onToggleAiDisabled: () => Promise<void>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
 }) {
@@ -3006,6 +3015,12 @@ function ProfileTab({
               </span>
             </div>
             <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
+              <span>AI mode</span>
+              <span className="font-black text-foreground">
+                {aiDisabled ? "Disabled" : "Enabled"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
               <span>Reminder notifications</span>
               <span className="font-black text-foreground">
                 {notificationPermission === "unsupported"
@@ -3029,19 +3044,35 @@ function ProfileTab({
               <Button
                 type="button"
                 disabled={billingPending !== null}
-                onClick={() => onBillingChange("pro")}
+                onClick={() => void onUpgrade()}
               >
                 {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
               </Button>
+              {IS_DEV_MODE ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={billingPending !== null}
+                  onClick={() => void onDowngrade()}
+                >
+                  {billingPending === "free" ? "Updating..." : "Downgrade"}
+                </Button>
+              ) : null}
+            </div>
+            {IS_DEV_MODE ? (
               <Button
                 type="button"
                 variant="outline"
-                disabled={billingPending !== null}
-                onClick={() => onBillingChange("free")}
+                disabled={aiTogglePending}
+                onClick={() => void onToggleAiDisabled()}
               >
-                {billingPending === "free" ? "Updating..." : "Downgrade"}
+                {aiTogglePending
+                  ? "Saving..."
+                  : aiDisabled
+                    ? "Enable AI"
+                    : "Disable AI"}
               </Button>
-            </div>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -3144,6 +3175,7 @@ function ProfileTab({
 
 export function DashboardShell() {
   const { user, isLoaded } = useUser();
+  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const searchParams = useSearchParams();
   const syncAttempted = useRef(false);
@@ -3155,6 +3187,7 @@ export function DashboardShell() {
   const [billingPending, setBillingPending] = useState<"free" | "pro" | null>(
     null,
   );
+  const [aiTogglePending, setAiTogglePending] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
   const [notificationPermission, setNotificationPermission] =
@@ -3333,6 +3366,7 @@ export function DashboardShell() {
   useEffect(() => {
     if (
       !convexUser ||
+      convexUser.aiDisabled ||
       !messages ||
       messages.length > 0 ||
       !convexUser.onboardingCompleted ||
@@ -3843,6 +3877,33 @@ export function DashboardShell() {
     }
   }
 
+  async function handleUpgrade() {
+    if (IS_DEV_MODE) {
+      await handleBillingChange("pro");
+      return;
+    }
+
+    router.push("/plans");
+  }
+
+  async function handleDowngrade() {
+    await handleBillingChange("free");
+  }
+
+  async function handleToggleAiDisabled() {
+    if (!convexUser) return;
+
+    setAiTogglePending(true);
+    try {
+      await updateProfile({
+        userId: convexUser._id,
+        aiDisabled: !Boolean(convexUser.aiDisabled),
+      });
+    } finally {
+      setAiTogglePending(false);
+    }
+  }
+
   if (!isLoaded || convexUser === undefined || habits === undefined) {
     return (
       <main className="min-h-screen bg-background px-6 py-10 text-foreground">
@@ -3919,7 +3980,7 @@ export function DashboardShell() {
             onSend={handleSendMessage}
             onQuickComplete={handleQuickComplete}
             onQuickMiss={handleQuickMiss}
-            onUpgrade={() => handleBillingChange("pro")}
+            onUpgrade={handleUpgrade}
           />
         ) : null}
 
@@ -3938,16 +3999,20 @@ export function DashboardShell() {
           <ProfileTab
             email={convexUser.email}
             tier={convexUser.subscriptionTier}
+            aiDisabled={Boolean(convexUser.aiDisabled)}
             budgetStatus={resolvedMessageBudgetStatus}
             weeklyStats={weeklyStats}
             habits={resolvedHabits}
             checkIns={resolvedAllCheckIns}
             billingPending={billingPending}
+            aiTogglePending={aiTogglePending}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationPending={notificationPending}
             onEnableNotifications={handleEnableNotifications}
-            onBillingChange={handleBillingChange}
+            onUpgrade={handleUpgrade}
+            onDowngrade={handleDowngrade}
+            onToggleAiDisabled={handleToggleAiDisabled}
             theme={theme}
             onToggleTheme={toggleTheme}
           />

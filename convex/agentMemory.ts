@@ -300,6 +300,10 @@ export const getDailySummaryCandidates = internalQuery({
 
     return users
       .filter((user) => {
+        if (user.aiDisabled) {
+          return false;
+        }
+
         const timezone = getTimezone(user);
         const localNow = toZonedTime(args.now, timezone);
         if (localNow.getHours() !== 2) {
@@ -388,6 +392,13 @@ export const refreshUserSummaries = internalAction({
       recentCheckIns: Doc<"checkIns">[];
       recentSkips: Doc<"habitSkips">[];
     };
+
+    if (context.user.aiDisabled) {
+      return {
+        userId: args.userId,
+        habitsProcessed: 0,
+      };
+    }
 
     const globalSummary = buildGlobalMemorySummary({
       habits: context.activeHabits,

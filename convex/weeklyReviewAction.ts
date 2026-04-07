@@ -261,6 +261,18 @@ async function generateReportsForUser(
     },
   )) as GenerationContext;
 
+  if (context.user.aiDisabled) {
+    return {
+      userId: context.user._id,
+      timezone: context.timezone,
+      weekStart: context.weekStart,
+      weekEnd: context.weekEnd,
+      createdReports: 0,
+      pushed: 0,
+      cleanedUp: 0,
+    };
+  }
+
   let createdReports = 0;
   let pushed = 0;
   let cleanedUp = 0;

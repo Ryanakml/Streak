@@ -2089,6 +2089,43 @@ export const sendMessage = action({
       clerkId: identity.subject,
       now,
     })) as ChatContext;
+
+    if (context.user.aiDisabled) {
+      const userMessageId = (await ctx.runMutation(internal.chat.storeMessage, {
+        userId: context.user._id,
+        habitId:
+          context.pendingClarificationHabitId ??
+          (context.todayHabits.length === 1
+            ? context.todayHabits[0]?._id
+            : undefined),
+        role: "user",
+        content,
+        intent: "check_in",
+        timestamp: now,
+      })) as Id<"messages">;
+
+      const aiMessageId = (await ctx.runMutation(internal.chat.storeMessage, {
+        userId: context.user._id,
+        role: "ai",
+        content:
+          "AI is disabled for this dev account. No agent action, model call, reminder reply, or check-in automation will run until you enable it again.",
+        intent: "question",
+        timestamp: now,
+      })) as Id<"messages">;
+
+      return {
+        userMessageId,
+        aiMessageId,
+        classification: "question",
+        resolvedIntent: "question",
+        responseMode: "question",
+        requiresClarification: false,
+        dailyMessageCount: context.user.dailyMessageCount,
+        remainingMessages: null,
+        limitReached: false,
+      };
+    }
+
     const pendingAction = (await ctx.runQuery(
       internal.agentActions.getPendingActionForUser,
       {
