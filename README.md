@@ -4,7 +4,7 @@ Streak is an AI accountability habit tracker. It combines a normal habit dashboa
 
 This README is written for two audiences:
 
-- Users and product testers who want to understand what the app does.
+- Users and product testers who want to understand what the app does. More detail, checkout app  [tutorial](tutorials.md)
 - Developers who need to run, maintain, or extend the codebase.
 
 ## Product Guide
