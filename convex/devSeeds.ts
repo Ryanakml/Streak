@@ -149,6 +149,16 @@ async function deleteSeedData(
     await ctx.db.delete(memory._id);
   }
 
+  const weeklyReports = (await ctx.db
+    .query("weeklyReports")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"weeklyReports">[];
+  for (const weeklyReport of weeklyReports.filter((entry) =>
+    habitIds.includes(entry.habitId),
+  )) {
+    await ctx.db.delete(weeklyReport._id);
+  }
+
   for (const habitId of habitIds) {
     await ctx.db.delete(habitId);
   }
@@ -2244,18 +2254,27 @@ export const seedUIDemo = mutation({
     }
 
     const now = Date.now();
+    const yesterday = shiftDateKey(args.today, -1);
+    const twoDaysAgo = shiftDateKey(args.today, -2);
+    const threeDaysAgo = shiftDateKey(args.today, -3);
+    const fourDaysAgo = shiftDateKey(args.today, -4);
+    const fiveDaysAgo = shiftDateKey(args.today, -5);
     const tomorrowKey = dayKeyFromDateKey(shiftDateKey(args.today, 1));
     const allDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
-    // Default config builder to reuse
     const makeHabit = async (
       name: string,
       targetDays: string[],
       schOffset: number,
       remOffset: number,
       dlOffset: number,
-      currentStreak: number = 0,
-      bestStreak: number = 0,
+      options?: {
+        currentStreak?: number;
+        bestStreak?: number;
+        isActive?: boolean;
+        rules?: string;
+        motivation?: string;
+      },
     ) => {
       return await ctx.db.insert("habits", {
         userId: user._id,
@@ -2264,11 +2283,11 @@ export const seedUIDemo = mutation({
         scheduledTime: addMinutes(args.localTime, schOffset),
         reminderTime: addMinutes(args.localTime, remOffset),
         checkInDeadline: addMinutes(args.localTime, dlOffset),
-        rules: "UI demonstration habit",
-        motivation: "To see all possible card states",
-        currentStreak,
-        bestStreak,
-        isActive: true,
+        rules: options?.rules ?? "UI demonstration habit",
+        motivation: options?.motivation ?? "To review frontend states before they happen live",
+        currentStreak: options?.currentStreak ?? 0,
+        bestStreak: options?.bestStreak ?? 0,
+        isActive: options?.isActive ?? true,
         createdAt: now,
       });
     };
@@ -2291,69 +2310,231 @@ export const seedUIDemo = mutation({
       });
     };
 
-    // 1. Upcoming Case (deadline 4+ hours away, reminder 3+ hours away)
-    // Scheduled +120m, Rem +100m, Deadline +240m
-    await makeHabit("Upcoming", allDays, 120, 100, 240, 5, 10);
+    const makeWorkoutLog = async (
+      habitId: Id<"habits">,
+      checkInId: Id<"checkIns">,
+      exercises: Doc<"workoutLogs">["exercises"],
+      notes?: string,
+    ) => {
+      return await ctx.db.insert("workoutLogs", {
+        habitId,
+        checkInId,
+        exercises,
+        notes,
+      });
+    };
 
-    // 2. Due Soon Case (reminder passed or deadline <= 120m away but > 45m)
-    // Scheduled -10m, Rem -30m, Deadline +90m
-    await makeHabit("Due Soon", allDays, -10, -30, 90, 12, 20);
+    const makeMessage = async (
+      role: "user" | "ai",
+      content: string,
+      tsOffsetMins: number,
+      intent?: string,
+      habitId?: Id<"habits">,
+    ) => {
+      return await ctx.db.insert("messages", {
+        userId: user._id,
+        habitId,
+        role,
+        content,
+        intent,
+        timestamp: toTimestamp(args.today, addMinutes(args.localTime, tsOffsetMins)),
+      });
+    };
 
-    // 3. Deadline Risk Case (deadline <= 45m away)
-    // Scheduled -60m, Rem -90m, Deadline +30m
-    await makeHabit("Deadline Risk", allDays, -60, -90, 30, 100, 100);
+    await makeHabit("Upcoming", allDays, 120, 100, 240, {
+      currentStreak: 5,
+      bestStreak: 10,
+    });
 
-    // 4. Overdue Case (deadline passed)
-    // Scheduled -180m, Rem -200m, Deadline -10m
-    await makeHabit("Overdue", allDays, -180, -200, -10, 3, 5);
+    const dueSoonHabit = await makeHabit("Due Soon", allDays, -10, -30, 90, {
+      currentStreak: 12,
+      bestStreak: 20,
+    });
 
-    // 5. Logged Case (completed today)
-    // Scheduled -60m, Rem -90m, Deadline +120m
+    const deadlineRiskHabit = await makeHabit(
+      "Deadline Risk",
+      allDays,
+      -60,
+      -90,
+      30,
+      {
+        currentStreak: 100,
+        bestStreak: 100,
+      },
+    );
+
+    const overdueHabit = await makeHabit("Overdue", allDays, -180, -200, -10, {
+      currentStreak: 3,
+      bestStreak: 5,
+    });
+
     const loggedHabit = await makeHabit(
       "Logged Today",
       allDays,
       -60,
       -90,
       120,
-      1,
-      1,
+      {
+        currentStreak: 1,
+        bestStreak: 1,
+      },
     );
-    await makeCheckIn(loggedHabit, args.today, "completed", -15);
+    const loggedTodayCheckIn = await makeCheckIn(
+      loggedHabit,
+      args.today,
+      "completed",
+      -15,
+    );
 
-    // 6. Missed Case (missed today)
-    // Scheduled -300m, Rem -320m, Deadline -120m
     const missedHabit = await makeHabit(
       "Missed Today",
       allDays,
       -300,
       -320,
       -120,
-      0,
-      14,
+      {
+        currentStreak: 0,
+        bestStreak: 14,
+      },
     );
     await makeCheckIn(missedHabit, args.today, "missed", -110);
 
-    // 7. Rest Case (not scheduled today)
-    await makeHabit("Rest Day", [tomorrowKey], 0, -30, 120, 10, 10);
+    const restHabit = await makeHabit("Rest Day", [tomorrowKey], 0, -30, 120, {
+      currentStreak: 10,
+      bestStreak: 10,
+    });
 
-    // 8. Bonus Case (not scheduled today but completed)
     const bonusHabit = await makeHabit(
       "Bonus Action",
       [tomorrowKey],
       0,
       -30,
       120,
-      0,
-      0,
+      {
+        currentStreak: 0,
+        bestStreak: 0,
+      },
     );
-    await makeCheckIn(bonusHabit, args.today, "bonus", -5);
+    const bonusTodayCheckIn = await makeCheckIn(
+      bonusHabit,
+      args.today,
+      "bonus",
+      -5,
+    );
+
+    await makeHabit("Paused Habit", [dayKeyFromDateKey(args.today)], -45, -75, 60, {
+      currentStreak: 7,
+      bestStreak: 18,
+      isActive: false,
+      rules: "Paused on purpose for profile and detail panel review",
+      motivation: "Confirm paused state styling and copy",
+    });
+
+    const dueSoonRecent = await makeCheckIn(
+      dueSoonHabit,
+      yesterday,
+      "completed",
+      -25,
+    );
+    await makeCheckIn(deadlineRiskHabit, threeDaysAgo, "completed", -35);
+    await makeCheckIn(deadlineRiskHabit, fourDaysAgo, "completed", -50);
+    await makeCheckIn(overdueHabit, twoDaysAgo, "missed", -70);
+    await makeCheckIn(missedHabit, fiveDaysAgo, "missed", -80);
+    await makeCheckIn(restHabit, yesterday, "completed", -40);
+
+    await makeWorkoutLog(
+      loggedHabit,
+      loggedTodayCheckIn,
+      [
+        { name: "Back squat", sets: 4, reps: 6, weight: 100 },
+        { name: "RDL", sets: 3, reps: 8, weight: 80 },
+      ],
+      "Seeded heavy lower-body session",
+    );
+    await makeWorkoutLog(
+      dueSoonHabit,
+      dueSoonRecent,
+      [{ name: "Tempo run", duration: 28, distance: 5 }],
+      "Seeded cardio log for stats rail",
+    );
+    await makeWorkoutLog(
+      bonusHabit,
+      bonusTodayCheckIn,
+      [{ name: "Mobility flow", duration: 20 }],
+      "Bonus session that should stay visible in stats",
+    );
+
+    await makeMessage(
+      "ai",
+      "Reminder fired. The window is already open. Either log the work or admit you missed it.",
+      -95,
+      "check_in",
+      deadlineRiskHabit,
+    );
+    await makeMessage(
+      "user",
+      "Gue baru selesai squat sama RDL tadi.",
+      -18,
+      "completed",
+      loggedHabit,
+    );
+    await makeMessage(
+      "ai",
+      "Logged. Good. That counts. Keep the next rep just as clean.",
+      -17,
+      "completed",
+      loggedHabit,
+    );
+    await makeMessage(
+      "user",
+      "Besok gue mesti ngapain aja?",
+      -9,
+      "ask_tomorrow_plan",
+      dueSoonHabit,
+    );
+    await makeMessage(
+      "ai",
+      "Tomorrow plan: Rest Day is the only scheduled item. Bonus work is optional, not a free excuse to drift.",
+      -8,
+      "planning",
+      restHabit,
+    );
+    await makeMessage(
+      "ai",
+      "Weekly review for [Seed UI] Missed Today: 4/7. You leaked two sessions for the same weak reason. Fix the pattern before it becomes your identity.",
+      -2,
+      "weekly_review",
+      missedHabit,
+    );
+
+    const weekStart = shiftDateKey(args.today, -6);
+    await ctx.db.insert("weeklyReports", {
+      userId: user._id,
+      habitId: missedHabit,
+      weekStart,
+      weekEnd: args.today,
+      targetCount: 7,
+      actualCount: 4,
+      bonusCount: 1,
+      completionRate: 57,
+      aiRoast:
+        "You hit 4 out of 7 and still found time to miss the same habit twice. The pattern is obvious. The discipline is not.",
+      missedDaysReasons: [
+        { day: "Tue", reason: "late start" },
+        { day: "Thu", reason: "ignored the reminder" },
+      ],
+    });
 
     return {
       userId: user._id,
       today: args.today,
       localTime: args.localTime,
-      habitsCreated: 8,
-      message: "Successfully seeded all UI card states.",
+      habitsCreated: 9,
+      messagesCreated: 6,
+      workoutLogsCreated: 3,
+      weeklyReportsCreated: 1,
+      message:
+        "Successfully seeded home, chat, stats, and profile-supporting UI review states.",
     };
   },
 });

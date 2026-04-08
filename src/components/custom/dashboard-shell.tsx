@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -54,12 +62,28 @@ const IS_DEV_MODE = process.env.NODE_ENV !== "production";
 
 type AppTab = "home" | "chat" | "stats" | "profile";
 type HabitDoc = Doc<"habits">;
+type AgentTaskDoc = Doc<"agentTasks">;
 type CheckInDoc = Doc<"checkIns">;
+type HabitSkipDoc = Doc<"habitSkips">;
 type MessageDoc = Doc<"messages">;
+type ReminderRunDoc = Doc<"reminderRuns">;
 type WorkoutLogDoc = Doc<"workoutLogs">;
 type WeeklyReportDoc = Doc<"weeklyReports">;
 type NotificationPermissionState = NotificationPermission | "unsupported";
-type WeekCellState = "completed" | "missed" | "bonus" | "rest" | "scheduled";
+type WeekCellState =
+  | "completed"
+  | "missed"
+  | "bonus"
+  | "rest"
+  | "scheduled"
+  | "skipped"
+  | "rescheduled";
+type WeekCellMetadata = {
+  state: WeekCellState;
+  label: string;
+  title: string;
+  isTargetDay: boolean;
+};
 type PressureState =
   | "rest"
   | "upcoming"
@@ -67,6 +91,37 @@ type PressureState =
   | "deadline-risk"
   | "logged"
   | "missed";
+type HighlightAlertCard =
+  | {
+      kind: "habit";
+      id: string;
+      priority: number;
+      label: string;
+      title: string;
+      support: string;
+      meta: string[];
+      actionLabel: string;
+      toneClassName: string;
+      toneTextClassName: string;
+      badgeClassName: string;
+      countLabel: string;
+      snapshot: HabitPressureSnapshot;
+    }
+  | {
+      kind: "task";
+      id: string;
+      priority: number;
+      label: string;
+      title: string;
+      support: string;
+      meta: string[];
+      actionLabel: string;
+      toneClassName: string;
+      toneTextClassName: string;
+      badgeClassName: string;
+      countLabel: string;
+      task: AgentTaskDoc;
+    };
 
 type HabitFormState = {
   name: string;
@@ -311,72 +366,147 @@ function getWeeklyCellState(
   habit: HabitDoc,
   day: ReturnType<typeof getWeekDays>[number],
   weeklyCheckIns: CheckInDoc[],
-  referenceDate: Date,
-): WeekCellState {
+  weeklySkips: HabitSkipDoc[],
+  weeklyReminderRuns: ReminderRunDoc[],
+): WeekCellMetadata {
   const checkIn = weeklyCheckIns.find(
     (entry) => entry.habitId === habit._id && entry.date === day.dateKey,
   );
+  const skip = weeklySkips.find(
+    (entry) => entry.habitId === habit._id && entry.date === day.dateKey,
+  );
+  const reminderRun = weeklyReminderRuns.find(
+    (entry) => entry.habitId === habit._id && entry.date === day.dateKey,
+  );
+  const isTargetDay = habit.isActive && habit.targetDays.includes(day.key);
+  const dateLabel = formatWorkoutDate(day.date.getTime());
 
   if (checkIn) {
-    return checkIn.status;
+    return {
+      state: checkIn.status,
+      label:
+        checkIn.status === "completed"
+          ? "Handled"
+          : checkIn.status === "missed"
+            ? "Missed"
+            : "Bonus",
+      title:
+        checkIn.status === "completed"
+          ? `${dateLabel}: Handled`
+          : checkIn.status === "missed"
+            ? `${dateLabel}: Missed`
+            : `${dateLabel}: Bonus`,
+      isTargetDay,
+    };
   }
 
-  const todayKey = toDateKey(referenceDate);
-  if (habit.targetDays.includes(day.key) && day.dateKey === todayKey) {
-    return "scheduled";
+  if (skip || reminderRun?.state === "skipped") {
+    return {
+      state: "skipped",
+      label: "Skipped",
+      title: `${dateLabel}: Skipped`,
+      isTargetDay,
+    };
   }
 
-  return "rest";
+  if (reminderRun?.state === "rescheduled") {
+    return {
+      state: "rescheduled",
+      label: "Rescheduled",
+      title: `${dateLabel}: Rescheduled off this slot`,
+      isTargetDay,
+    };
+  }
+
+  if (isTargetDay) {
+    return {
+      state: "scheduled",
+      label: "Scheduled",
+      title: `${dateLabel}: Scheduled`,
+      isTargetDay,
+    };
+  }
+
+  return {
+    state: "rest",
+    label: "Rest",
+    title: `${dateLabel}: Rest day`,
+    isTargetDay: false,
+  };
 }
 
 function WeekGrid({
   habit,
   weekDays,
   weeklyCheckIns,
+  weeklySkips,
+  weeklyReminderRuns,
   referenceDate,
 }: {
   habit: HabitDoc;
   weekDays: ReturnType<typeof getWeekDays>;
   weeklyCheckIns: CheckInDoc[];
+  weeklySkips: HabitSkipDoc[];
+  weeklyReminderRuns: ReminderRunDoc[];
   referenceDate: Date;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
       {weekDays.map((day) => {
-        const state = getWeeklyCellState(
+        const cell = getWeeklyCellState(
           habit,
           day,
           weeklyCheckIns,
-          referenceDate,
+          weeklySkips,
+          weeklyReminderRuns,
         );
-        const label =
-          state === "completed"
-            ? "Done"
-            : state === "missed"
-              ? "Miss"
-              : state === "bonus"
-                ? "Bonus"
-                : state === "scheduled"
-                  ? "Due"
-                  : "Rest";
+        const isToday = day.dateKey === toDateKey(referenceDate);
+        const style =
+          cell.state === "missed"
+            ? "bg-[#DF3B23] text-white border-black"
+            : cell.state === "completed"
+              ? "bg-black text-white border-black"
+              : cell.state === "bonus"
+                ? "bg-[#F2E3BC] text-[#5C3B00] border-[#B7925A]"
+                : cell.state === "skipped"
+                  ? "bg-[#F7EFE1] text-[#7B5D3A] border-dashed border-[#B7925A]"
+                  : cell.state === "rescheduled"
+                    ? "bg-[#F7ECE8] text-[#9D6760] border-[#D6AAA2] opacity-75"
+                    : cell.state === "scheduled"
+                      ? "bg-[#E4DED1] text-[#4F4A42] border-[#8E8678]"
+                      : "bg-background text-muted-foreground border-black/15";
 
         return (
           <div
             key={`${habit._id}-${day.dateKey}`}
-            title={`${formatWorkoutDate(day.date.getTime())}: ${label}`}
-            className={`flex h-10 w-10 items-center justify-center border-2 uppercase font-bold ${
-              state === "missed"
-                ? "bg-[#DF3B23] text-white border-black"
-                : state === "completed"
-                  ? "bg-black text-white border-black"
-                  : state === "bonus"
-                    ? "bg-secondary text-foreground border-black"
-                    : state === "scheduled"
-                      ? "bg-background text-foreground border-dashed border-black"
-                      : "bg-background text-muted-foreground border-black/20"
-            }`}
+            title={cell.title}
+            aria-label={cell.title}
+            className={`relative flex h-10 w-10 items-center justify-center border-2 uppercase font-bold ${style} ${isToday ? "ring-2 ring-foreground ring-offset-2 ring-offset-background" : ""}`}
           >
-            <span className="text-[10px]">{day.label.charAt(0)}</span>
+            <span
+              className={`text-[10px] ${
+                cell.state === "rescheduled"
+                  ? "line-through decoration-[1.5px]"
+                  : ""
+              }`}
+            >
+              {day.label.charAt(0)}
+            </span>
+            {cell.isTargetDay &&
+            (cell.state === "scheduled" ||
+              cell.state === "rescheduled" ||
+              cell.state === "skipped") ? (
+              <span
+                aria-hidden="true"
+                className={`absolute bottom-1 left-1/2 h-1 w-4 -translate-x-1/2 ${
+                  cell.state === "scheduled"
+                    ? "bg-[#6E675B]"
+                    : cell.state === "rescheduled"
+                      ? "bg-[#C58B83]"
+                      : "bg-[#B7925A]"
+                }`}
+              />
+            ) : null}
           </div>
         );
       })}
@@ -410,7 +540,8 @@ function HabitComposerDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <Button
         type="button"
-        variant="outline"
+        variant="default"
+        className="bg-black text-white"
         onClick={() => setOpen(true)}
         disabled={disabled}
       >
@@ -965,11 +1096,11 @@ function getHabitPressureSnapshot(
     primaryActionLabel: "Open chat",
     chatPrompt: `How am I doing with ${habit.name}?`,
     cardClassName:
-      "bg-background text-muted-foreground opacity-60 border-2 border-black/30",
-    badgeClassName: "bg-background text-muted-foreground border-black/30",
-    panelClassName: "border-black/30 bg-background text-muted-foreground",
-    panelToneClassName: "text-muted-foreground",
-    emphasisClassName: "text-muted-foreground",
+      "border-2 border-[#7E7868] bg-[#F1ECE2] text-[#5B5549] opacity-90",
+    badgeClassName: "border-[#A59A84] bg-[#E2D8C4] text-[#5B5549]",
+    panelClassName: "border-[#B8AE99] bg-[#FAF6EE] text-[#5B5549]",
+    panelToneClassName: "text-[#6A6357]",
+    emphasisClassName: "text-[#6A6357]",
     countdownMinutes: null,
     deadlineProgress: scheduledToday ? deadlineProgress : null,
     urgencyLabel: "No active clock",
@@ -977,6 +1108,7 @@ function getHabitPressureSnapshot(
   };
 
   if (state === "logged") {
+    const isBonusLog = checkIn?.status === "bonus";
     return {
       ...base,
       habit,
@@ -984,34 +1116,39 @@ function getHabitPressureSnapshot(
       scheduledToday,
       state,
       priority: getPressurePriority(state),
-      nextTimeLabel: "Logged",
+      nextTimeLabel: isBonusLog ? "Bonus logged" : "Logged",
       nextTimeValue: formatFullTime(
         checkIn?.timestamp ?? referenceDate.getTime(),
       ),
-      countdownLabel:
-        checkIn?.status === "bonus" ? "Bonus work banked" : "Target handled",
-      headline:
-        habit.currentStreak + 1 > 1
+      countdownLabel: isBonusLog ? "Bonus work banked" : "Target handled",
+      headline: isBonusLog
+        ? `${habit.name} got extra work.`
+        : habit.currentStreak + 1 > 1
           ? `Chain protected. ${habit.name} is done.`
           : `${habit.name} is on the board.`,
-      support:
-        checkIn?.status === "bonus"
-          ? "Extra work counts. Keep the standard tomorrow just as clean."
-          : "You handled today's rep. Tomorrow still expects the same standard.",
+      support: isBonusLog
+        ? "Extra work counts. It helps, but tomorrow still expects the actual standard."
+        : "You handled today's rep. Tomorrow still expects the same standard.",
       streakLabel:
         habit.currentStreak > 0
           ? `Streak rolling ${habit.currentStreak} days`
           : "First clean log on record",
       primaryActionLabel: "Review with coach",
       chatPrompt: `Give me the readout for ${habit.name} after today's log.`,
-      cardClassName: "bg-[#05120C] text-white",
-      badgeClassName: "bg-[#113A28] text-white border-[#113A28]",
-      panelClassName: "border-[#113A28] bg-[#0A2418] text-white",
-      panelToneClassName: "text-white/80",
-      emphasisClassName: "text-[#4CAF50]",
+      cardClassName: isBonusLog
+        ? "bg-[#1B1404] text-[#FFF8E5]"
+        : "bg-[#05120C] text-white",
+      badgeClassName: isBonusLog
+        ? "bg-[#A66A00] text-[#FFF8E5] border-[#A66A00]"
+        : "bg-[#113A28] text-white border-[#113A28]",
+      panelClassName: isBonusLog
+        ? "border-[#A66A00] bg-[#2A1F07] text-[#FFF8E5]"
+        : "border-[#113A28] bg-[#0A2418] text-white",
+      panelToneClassName: isBonusLog ? "text-[#F4DCA1]" : "text-white/80",
+      emphasisClassName: isBonusLog ? "text-[#F4B942]" : "text-[#4CAF50]",
       countdownMinutes: null,
       deadlineProgress: 100,
-      urgencyLabel: "Locked in",
+      urgencyLabel: isBonusLog ? "Extra work logged" : "Locked in",
       isPrimaryCandidate: true,
     };
   }
@@ -1123,11 +1260,13 @@ function getHabitPressureSnapshot(
         : base.streakLabel,
       primaryActionLabel: "Check in now",
       chatPrompt: `Keep me on track for ${habit.name} today.`,
-      cardClassName: "bg-background text-foreground border-[3px] border-black",
-      badgeClassName: "bg-black text-white border-black",
-      panelClassName: "border-[2px] border-black bg-background text-foreground",
-      panelToneClassName: "text-foreground",
-      emphasisClassName: "text-foreground",
+      cardClassName:
+        "border-[3px] border-[#B87912] bg-[#FFF2CF] text-[#3B2604]",
+      badgeClassName: "border-[#B87912] bg-[#F4B942] text-[#3B2604]",
+      panelClassName:
+        "border-[2px] border-[#D59A1A] bg-[#FFF8E7] text-[#3B2604]",
+      panelToneClassName: "text-[#5C3B00]",
+      emphasisClassName: "text-[#A05A00]",
       countdownMinutes:
         minutesToReminder <= 0 ? minutesToDeadline : minutesToReminder,
       deadlineProgress,
@@ -1158,11 +1297,11 @@ function getHabitPressureSnapshot(
         : base.streakLabel,
       primaryActionLabel: "Prep with coach",
       chatPrompt: `Set me up to hit ${habit.name} clean today.`,
-      cardClassName: "bg-background text-foreground",
-      badgeClassName: "bg-background text-foreground border-black",
-      panelClassName: "border-black bg-background text-foreground",
-      panelToneClassName: "text-foreground",
-      emphasisClassName: "text-foreground",
+      cardClassName: "border-2 border-[#D88A80] bg-[#F7DFDB] text-[#6A1F16]",
+      badgeClassName: "border-[#D88A80] bg-[#EFA49A] text-[#6A1F16]",
+      panelClassName: "border-[#D88A80] bg-[#FDF0ED] text-[#6A1F16]",
+      panelToneClassName: "text-[#7C2A20]",
+      emphasisClassName: "text-[#C64B3A]",
       countdownMinutes: minutesToReminder,
       deadlineProgress,
       urgencyLabel: "Clock not hot yet",
@@ -1201,6 +1340,37 @@ function rankHabitSnapshots(
   return left.habit.name.localeCompare(right.habit.name);
 }
 
+function isCompactHomeSnapshot(
+  snapshot: HabitPressureSnapshot,
+  isPrimary: boolean,
+) {
+  if (isUrgentHomeSnapshot(snapshot)) {
+    return false;
+  }
+
+  if (isPrimary) {
+    return false;
+  }
+
+  if (!snapshot.habit.isActive) {
+    return true;
+  }
+
+  return (
+    snapshot.state === "logged" ||
+    snapshot.state === "rest" ||
+    snapshot.state === "upcoming"
+  );
+}
+
+function isUrgentHomeSnapshot(snapshot: HabitPressureSnapshot) {
+  return (
+    snapshot.state === "missed" ||
+    snapshot.state === "deadline-risk" ||
+    snapshot.state === "due-soon"
+  );
+}
+
 function PressureBadge({
   snapshot,
   subtle = false,
@@ -1210,20 +1380,24 @@ function PressureBadge({
 }) {
   return (
     <span
-      className={`inline-flex border px-2 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${
-        subtle ? "border-current/40 bg-transparent" : snapshot.badgeClassName
+      className={`inline-flex items-center border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${
+        subtle
+          ? "border-current/35 bg-background/20 text-current"
+          : `${snapshot.badgeClassName} shadow-[2px_2px_0px_0px_rgba(26,24,20,0.15)]`
       }`}
     >
       {snapshot.state === "rest"
         ? "Rest"
         : snapshot.state === "upcoming"
-          ? "Up next"
+          ? "Queued"
           : snapshot.state === "due-soon"
             ? "Due soon"
             : snapshot.state === "deadline-risk"
               ? "Deadline risk"
               : snapshot.state === "logged"
-                ? "Logged"
+                ? snapshot.checkIn?.status === "bonus"
+                  ? "Bonus"
+                  : "Logged"
                 : "Missed"}
     </span>
   );
@@ -1243,7 +1417,7 @@ function CountdownMeter({
   return (
     <div className={`space-y-2 ${snapshot.panelToneClassName}`}>
       <div className="flex flex-wrap items-center justify-between gap-3 text-[10px] font-black uppercase tracking-[0.24em]">
-        <span>{snapshot.urgencyLabel}</span>
+        <span className="opacity-75">{snapshot.urgencyLabel}</span>
         <span className={snapshot.emphasisClassName}>
           {snapshot.countdownMinutes === null
             ? snapshot.countdownLabel
@@ -1251,15 +1425,21 @@ function CountdownMeter({
         </span>
       </div>
       <div
-        className={`border border-current/20 ${compact ? "h-2" : "h-3"} bg-black/5`}
+        className={`overflow-hidden border border-current/20 ${compact ? "h-2" : "h-3"} bg-black/5`}
       >
         <div
           className={`h-full transition-all duration-500 ${
             snapshot.state === "missed" || snapshot.state === "deadline-risk"
               ? "bg-[#DF3B23]"
               : snapshot.state === "logged"
-                ? "bg-black"
-                : "bg-[#B88A12]"
+                ? snapshot.checkIn?.status === "bonus"
+                  ? "bg-[#A66A00]"
+                  : "bg-[#113A28]"
+                : snapshot.state === "upcoming"
+                  ? "bg-[#C64B3A]"
+                  : snapshot.state === "rest"
+                    ? "bg-[#A59A84]"
+                    : "bg-[#D59A1A]"
           } ${snapshot.state === "missed" ? "animate-pulse" : ""}`}
           style={{ width: `${snapshot.deadlineProgress}%` }}
         />
@@ -1268,99 +1448,444 @@ function CountdownMeter({
   );
 }
 
+function compareTaskScheduleAsc(left: AgentTaskDoc, right: AgentTaskDoc) {
+  if (left.date !== right.date) {
+    return left.date.localeCompare(right.date);
+  }
+  if ((left.time ?? "") !== (right.time ?? "")) {
+    return (left.time ?? "").localeCompare(right.time ?? "");
+  }
+  return left._creationTime - right._creationTime;
+}
+
+function buildHighlightAlertCards(args: {
+  snapshots: HabitPressureSnapshot[];
+  tasks: AgentTaskDoc[];
+  currentTime: Date;
+}): HighlightAlertCard[] {
+  const missed =
+    [...args.snapshots]
+      .filter((snapshot) => snapshot.state === "missed")
+      .sort(rankHabitSnapshots)[0] ?? null;
+  const overdue =
+    [...args.snapshots]
+      .filter(
+        (snapshot) =>
+          snapshot.state === "deadline-risk" &&
+          (snapshot.countdownMinutes ?? 1) <= 0,
+      )
+      .sort(rankHabitSnapshots)[0] ?? null;
+  const dueToday =
+    [...args.snapshots]
+      .filter(
+        (snapshot) =>
+          snapshot.state === "due-soon" ||
+          (snapshot.state === "deadline-risk" &&
+            (snapshot.countdownMinutes ?? 1) > 0),
+      )
+      .sort(rankHabitSnapshots)[0] ?? null;
+  const pendingTask =
+    [...args.tasks]
+      .filter((task) => task.status === "pending")
+      .sort(compareTaskScheduleAsc)[0] ?? null;
+
+  const cards: HighlightAlertCard[] = [];
+
+  if (missed) {
+    cards.push({
+      kind: "habit",
+      id: `missed-${missed.habit._id}`,
+      priority: 4,
+      label: "Missed",
+      title: missed.headline,
+      support: missed.support,
+      meta: [missed.habit.name, missed.nextTimeLabel, missed.nextTimeValue],
+      actionLabel: "Open chat",
+      toneClassName: "bg-[#DF3B23] text-white border-[#BF2D19]",
+      toneTextClassName: "text-white/90",
+      badgeClassName: "border-white bg-white text-[#DF3B23]",
+      countLabel: "Needs action",
+      snapshot: missed,
+    });
+  }
+
+  if (overdue) {
+    cards.push({
+      kind: "habit",
+      id: `overdue-${overdue.habit._id}`,
+      priority: 3,
+      label: "Overdue",
+      title: overdue.habit.name,
+      support:
+        overdue.countdownMinutes !== null && overdue.countdownMinutes <= 0
+          ? "The deadline already passed. Either own the miss or lock the next rep."
+          : overdue.support,
+      meta: [
+        overdue.nextTimeLabel,
+        overdue.nextTimeValue,
+        overdue.countdownLabel,
+      ],
+      actionLabel: "Handle now",
+      toneClassName:
+        "border-[3px] border-[#DF3B23] bg-background text-foreground",
+      toneTextClassName: "text-foreground",
+      badgeClassName: "border-[#DF3B23] bg-[#DF3B23] text-white",
+      countLabel: "Past deadline",
+      snapshot: overdue,
+    });
+  }
+
+  if (dueToday) {
+    cards.push({
+      kind: "habit",
+      id: `due-${dueToday.habit._id}`,
+      priority: 2,
+      label: "Due today",
+      title: dueToday.habit.name,
+      support: dueToday.support,
+      meta: [
+        dueToday.nextTimeLabel,
+        dueToday.nextTimeValue,
+        dueToday.countdownLabel,
+      ],
+      actionLabel: dueToday.primaryActionLabel,
+      toneClassName:
+        "border-[3px] border-[#B87912] bg-[#FFF2CF] text-[#3B2604]",
+      toneTextClassName: "text-[#5C3B00]",
+      badgeClassName: "border-[#B87912] bg-[#F4B942] text-[#3B2604]",
+      countLabel: "Live today",
+      snapshot: dueToday,
+    });
+  }
+
+  if (pendingTask) {
+    const taskDate = new Date(`${pendingTask.date}T00:00:00`);
+    cards.push({
+      kind: "task",
+      id: `task-${pendingTask._id}`,
+      priority: 1,
+      label: "Task",
+      title: pendingTask.title,
+      support:
+        pendingTask.date === toDateKey(args.currentTime)
+          ? "Task from chat is due today. Do not let it hide behind habit noise."
+          : "Task added from chat. Keep it visible so it does not disappear into the feed.",
+      meta: [
+        formatWorkoutDate(taskDate.getTime()),
+        pendingTask.time ?? "No time set",
+        pendingTask.source,
+      ],
+      actionLabel: "Open chat",
+      toneClassName: "border-black/30 bg-background text-foreground",
+      toneTextClassName: "text-foreground",
+      badgeClassName: "border-black/30 bg-background text-foreground",
+      countLabel:
+        pendingTask.date === toDateKey(args.currentTime) ? "Today" : "Queued",
+      task: pendingTask,
+    });
+  }
+
+  return cards.slice(0, 4);
+}
+
 function SummaryStatusCard({
-  snapshot,
+  snapshots,
+  tasks,
   scheduledToday,
   completedToday,
   subscriptionTier,
   currentTime,
   onPrimaryAction,
 }: {
-  snapshot: HabitPressureSnapshot | null;
+  snapshots: HabitPressureSnapshot[];
+  tasks: AgentTaskDoc[];
   scheduledToday: number;
   completedToday: number;
   subscriptionTier: "free" | "pro";
   currentTime: Date;
-  onPrimaryAction: () => void;
+  onPrimaryAction: (card: HighlightAlertCard) => void;
 }) {
+  const highlightCards = useMemo(
+    () => buildHighlightAlertCards({ snapshots, tasks, currentTime }),
+    [currentTime, snapshots, tasks],
+  );
+  const [frontCardIndex, setFrontCardIndex] = useState(0);
+  const [dragOffset, setDragOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isExiting, setIsExiting] = useState(false);
+  const [exitDirection, setExitDirection] = useState<1 | -1 | 0>(0);
+  const dragStateRef = useRef<{ pointerId: number; startX: number } | null>(
+    null,
+  );
+  const exitTimerRef = useRef<number | null>(null);
+  const wheelAccumulatorRef = useRef(0);
+  const wheelGestureConsumedRef = useRef(false);
+  const wheelIdleTimerRef = useRef<number | null>(null);
+  const scrollLockTimerRef = useRef<number | null>(null);
+  const isScrollLockedRef = useRef(false);
+  const cardCount = highlightCards.length;
+  const normalizedFrontIndex =
+    cardCount === 0
+      ? 0
+      : ((frontCardIndex % cardCount) + cardCount) % cardCount;
+  const orderedCards = useMemo(
+    () =>
+      cardCount === 0
+        ? []
+        : Array.from(
+            { length: cardCount },
+            (_, offset) =>
+              highlightCards[(normalizedFrontIndex + offset) % cardCount],
+          ),
+    [cardCount, highlightCards, normalizedFrontIndex],
+  );
+
+  const triggerLoopShift = useCallback(
+    (direction: 1 | -1) => {
+      if (cardCount <= 1 || isExiting) return;
+      setIsExiting(true);
+      setExitDirection(direction);
+      wheelAccumulatorRef.current = 0;
+      if (exitTimerRef.current !== null) {
+        window.clearTimeout(exitTimerRef.current);
+      }
+      exitTimerRef.current = window.setTimeout(() => {
+        setFrontCardIndex((current) => current + direction);
+        setDragOffset(0);
+        setIsDragging(false);
+        setIsExiting(false);
+        setExitDirection(0);
+      }, 180);
+    },
+    [cardCount, isExiting],
+  );
+
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (cardCount <= 1 || isExiting) return;
+      dragStateRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+      };
+      setIsDragging(true);
+      setDragOffset(0);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [cardCount, isExiting],
+  );
+
+  const handlePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!dragStateRef.current) return;
+      setDragOffset(event.clientX - dragStateRef.current.startX);
+    },
+    [],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!dragStateRef.current) return;
+      const threshold = 64;
+      if (dragOffset >= threshold) {
+        triggerLoopShift(1);
+      } else if (dragOffset <= -threshold) {
+        triggerLoopShift(-1);
+      } else {
+        setDragOffset(0);
+        setIsDragging(false);
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      dragStateRef.current = null;
+    },
+    [dragOffset, triggerLoopShift],
+  );
+
+  const handleWheel = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      if (cardCount <= 1 || isExiting || isScrollLockedRef.current) return;
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      event.preventDefault();
+
+      if (wheelIdleTimerRef.current !== null) {
+        window.clearTimeout(wheelIdleTimerRef.current);
+      }
+      wheelIdleTimerRef.current = window.setTimeout(() => {
+        wheelAccumulatorRef.current = 0;
+        wheelGestureConsumedRef.current = false;
+      }, 140);
+
+      if (wheelGestureConsumedRef.current) return;
+
+      wheelAccumulatorRef.current += event.deltaX;
+      const threshold = 72;
+      if (wheelAccumulatorRef.current >= threshold) {
+        isScrollLockedRef.current = true;
+        wheelAccumulatorRef.current = 0;
+        wheelGestureConsumedRef.current = true;
+        triggerLoopShift(-1);
+        if (scrollLockTimerRef.current !== null) {
+          window.clearTimeout(scrollLockTimerRef.current);
+        }
+        scrollLockTimerRef.current = window.setTimeout(() => {
+          isScrollLockedRef.current = false;
+        }, 240);
+      } else if (wheelAccumulatorRef.current <= -threshold) {
+        isScrollLockedRef.current = true;
+        wheelAccumulatorRef.current = 0;
+        wheelGestureConsumedRef.current = true;
+        triggerLoopShift(1);
+        if (scrollLockTimerRef.current !== null) {
+          window.clearTimeout(scrollLockTimerRef.current);
+        }
+        scrollLockTimerRef.current = window.setTimeout(() => {
+          isScrollLockedRef.current = false;
+        }, 240);
+      }
+    },
+    [cardCount, isExiting, triggerLoopShift],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (exitTimerRef.current !== null) {
+        window.clearTimeout(exitTimerRef.current);
+      }
+      if (wheelIdleTimerRef.current !== null) {
+        window.clearTimeout(wheelIdleTimerRef.current);
+      }
+      if (scrollLockTimerRef.current !== null) {
+        window.clearTimeout(scrollLockTimerRef.current);
+      }
+    };
+  }, []);
+
   return (
-    <div className="grid gap-6 md:grid-cols-[1.1fr_0.9fr]">
-      <div className="space-y-3">
+    <div
+      className={`grid gap-4 ${highlightCards.length > 0 ? "md:grid-cols-[0.88fr_1.12fr]" : "md:grid-cols-1"}`}
+    >
+      <div className="space-y-2 border-2 border-black bg-secondary p-5 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)]">
         <p className="brutal-meta">Streak</p>
-        <h1 className="text-5xl font-black uppercase tracking-[-0.08em] sm:text-7xl">
+        <h1 className="text-4xl font-black uppercase tracking-[-0.08em] sm:text-6xl">
           {formatToday(currentTime)}
         </h1>
-        <p className="border-t-2 border-black pt-3 text-xl font-black uppercase tracking-[0.22em] text-muted-foreground">
-          {formatTime(currentTime)}
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-black pt-3">
+          <p className="text-base font-black uppercase tracking-[0.22em] text-muted-foreground">
+            {formatTime(currentTime)}
+          </p>
+          <Badge className="bg-black text-white">
+            {subscriptionTier.toUpperCase()}
+          </Badge>
+        </div>
       </div>
 
-      <div
-        className={`grid gap-4 border-2 p-5 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)] ${
-          snapshot?.panelClassName ??
-          "border-black bg-background text-foreground"
-        }`}
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-current/20 pb-4">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              {snapshot ? <PressureBadge snapshot={snapshot} /> : null}
-              <Badge className="bg-black text-white">
-                {subscriptionTier.toUpperCase()}
-              </Badge>
-            </div>
-            <p className="text-3xl font-black uppercase tracking-[-0.05em]">
-              {snapshot ? snapshot.headline : "Nothing due today."}
-            </p>
-            {snapshot ? <CountdownMeter snapshot={snapshot} compact /> : null}
-          </div>
-          <div className="text-right">
-            <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
-              Daily status
-            </p>
-            <p className="mt-2 text-2xl font-black">
-              {scheduledToday > 0
-                ? `${completedToday}/${scheduledToday}`
-                : "0/0"}
-            </p>
-          </div>
-        </div>
+      {highlightCards.length > 0 ? (
+        <div
+          className={`relative min-h-[300px] touch-pan-y select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onPointerLeave={handlePointerUp}
+          onWheel={handleWheel}
+        >
+          {orderedCards.map((card, index) => {
+            const translateX =
+              index === 0
+                ? isExiting
+                  ? exitDirection * 420
+                  : dragOffset
+                : index * 36;
+            const scale = index === 0 ? 1 : 0.985 - Math.min(index, 2) * 0.02;
+            const opacity =
+              index > 2 ? 0 : index === 0 ? 1 : 0.88 - index * 0.1;
+            const zIndex = 50 - index;
+            const transitionClass =
+              index === 0
+                ? isDragging
+                  ? "duration-0"
+                  : isExiting
+                    ? "duration-200"
+                    : "duration-200"
+                : "duration-200";
 
-        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-          <div className="space-y-2">
-            <p
-              className={`text-sm uppercase tracking-[0.14em] opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
-            >
-              {snapshot
-                ? `${snapshot.habit.name} · ${snapshot.countdownLabel}`
-                : "No target habit is scheduled. Use chat for bonus work or tomorrow's setup."}
-            </p>
-            <p
-              className={`text-sm uppercase tracking-[0.12em] opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
-            >
-              {snapshot?.support ??
-                "No target habit is scheduled today. Use chat to plan ahead."}
-            </p>
-            {snapshot ? (
+            return (
               <div
-                className={`flex flex-wrap gap-3 text-xs font-bold uppercase tracking-wider ${snapshot.panelToneClassName}`}
+                key={card.id}
+                onClick={() => {
+                  if (index > 0) {
+                    setFrontCardIndex((current) => current + index);
+                  }
+                }}
+                className={`absolute left-0 top-0 w-[calc(100%-3.25rem)] border-2 p-5 text-left shadow-[8px_8px_0px_0px_rgba(26,24,20,0.28)] transition-[transform,opacity] ${transitionClass} ${index > 0 ? "cursor-pointer" : ""} ${card.toneClassName}`}
+                style={{
+                  transform: `translate3d(${translateX}px, 0, 0) scale(${scale})`,
+                  zIndex,
+                  opacity,
+                }}
               >
-                <span>
-                  {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
-                </span>
-                <span>{snapshot.streakLabel}</span>
+                <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-current/15 pb-4">
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${card.badgeClassName}`}
+                      >
+                        {card.label}
+                      </span>
+                    </div>
+                    <p className="text-2xl font-black uppercase tracking-[-0.05em] sm:text-3xl">
+                      {card.title}
+                    </p>
+                  </div>
+                  <div className="min-w-[112px] border-2 border-current/20 bg-background/35 p-3 text-right">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80">
+                      Today
+                    </p>
+                    <p className="mt-2 text-3xl font-black">
+                      {scheduledToday > 0
+                        ? `${completedToday}/${scheduledToday}`
+                        : "0/0"}
+                    </p>
+                    <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] opacity-70">
+                      {card.countLabel}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 pt-4 lg:grid-cols-[1fr_auto] lg:items-end">
+                  <div className="space-y-2">
+                    <p
+                      className={`text-[11px] font-bold uppercase tracking-[0.18em] opacity-80 ${card.toneTextClassName}`}
+                    >
+                      {card.meta.join(" · ")}
+                    </p>
+                    <p
+                      className={`max-w-2xl text-sm leading-6 opacity-90 ${card.toneTextClassName}`}
+                    >
+                      {card.support}
+                    </p>
+                    {card.kind === "habit" ? (
+                      <CountdownMeter snapshot={card.snapshot} compact />
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant={card.kind === "task" ? "outline" : "default"}
+                    disabled={index !== 0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onPrimaryAction(card);
+                    }}
+                  >
+                    {card.actionLabel}
+                  </Button>
+                </div>
               </div>
-            ) : null}
-          </div>
-          <Button
-            type="button"
-            variant={snapshot?.state === "logged" ? "outline" : "default"}
-            onClick={onPrimaryAction}
-          >
-            {snapshot?.primaryActionLabel ?? "Open chat"}
-          </Button>
+            );
+          })}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -1387,12 +1912,89 @@ function HomeHabitCard({
   onOpenDetail: (habit: HabitDoc) => void;
 }) {
   const { habit, checkIn, scheduledToday, state } = snapshot;
+  const isLoggedCard = state === "logged";
+  const detailSurfaceClassName =
+    state === "missed"
+      ? "border-[#F2A195]/35 bg-[#EA7D6B] text-[#FFF4ED]"
+      : state === "deadline-risk"
+        ? "border-[#F0B5AD]/40 bg-[#FBE1DC] text-[#6B1E15]"
+        : "border-current/15 bg-background/40 text-current";
+  const statusBadgeClassName = isLoggedCard
+    ? checkIn?.status === "bonus"
+      ? "border-[#F4DCA1]/60 bg-[#FFF8E5]/10 text-[#FFF8E5]"
+      : "border-white/35 bg-white/10 text-white"
+    : undefined;
   const canMarkComplete =
     pendingHabitId !== habit._id &&
     !checkIn &&
     habit.isActive &&
     scheduledToday &&
     state !== "missed";
+  const compact = isCompactHomeSnapshot(snapshot, isPrimary);
+
+  if (compact) {
+    return (
+      <Card
+        className={`${snapshot.cardClassName} border-2 shadow-[6px_6px_0px_0px_rgba(26,24,20,0.12)]`}
+      >
+        <CardContent className="grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <PressureBadge snapshot={snapshot} subtle />
+              <Badge variant="outline" className={statusBadgeClassName}>
+                {habit.isActive ? "Active" : "Paused"}
+              </Badge>
+              {isPrimary ? (
+                <span className="text-[10px] font-black uppercase tracking-[0.24em] text-muted-foreground">
+                  Primary
+                </span>
+              ) : null}
+            </div>
+            <div className="space-y-1">
+              <CardTitle className="text-2xl">{habit.name}</CardTitle>
+              <p className="text-sm leading-6 opacity-85">{snapshot.support}</p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.18em]">
+              <span className="border border-current/20 bg-background/30 px-2 py-1">
+                {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
+              </span>
+              <span className="border border-current/20 bg-background/30 px-2 py-1">
+                {snapshot.streakLabel}
+              </span>
+              {checkIn?.status === "bonus" ? (
+                <span className="border border-current/20 bg-background/30 px-2 py-1">
+                  Bonus logged
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 md:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenDetail(habit)}
+            >
+              <PencilLine />
+              Details
+            </Button>
+            <Button type="button" variant="outline" onClick={onOpenChat}>
+              <MessageSquare />
+              Chat
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onToggleActive(habit)}
+              disabled={pendingHabitId === habit._id}
+            >
+              {habit.isActive ? "Pause" : "Resume"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card
@@ -1413,7 +2015,7 @@ function HomeHabitCard({
               </span>
             ) : null}
             <PressureBadge snapshot={snapshot} subtle={!isPrimary} />
-            <Badge variant="outline">
+            <Badge variant="outline" className={statusBadgeClassName}>
               {habit.isActive ? "Active" : "Paused"}
             </Badge>
           </div>
@@ -1421,13 +2023,13 @@ function HomeHabitCard({
             <CardTitle className={`${isPrimary ? "text-4xl" : "text-3xl"}`}>
               {habit.name}
             </CardTitle>
-            <p className="text-sm uppercase tracking-[0.12em] opacity-80">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] opacity-80">
               {snapshot.headline}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             variant="outline"
@@ -1464,7 +2066,9 @@ function HomeHabitCard({
             </p>
             <p className="mt-3 text-3xl font-black uppercase tracking-[-0.05em]">
               {state === "logged"
-                ? "Handled"
+                ? checkIn?.status === "bonus"
+                  ? "Bonus banked"
+                  : "Handled"
                 : state === "missed"
                   ? "Missed"
                   : state === "deadline-risk"
@@ -1475,7 +2079,7 @@ function HomeHabitCard({
                         ? "Queued up"
                         : "Off the clock"}
             </p>
-            <p className="mt-3 text-sm leading-relaxed opacity-90">
+            <p className="mt-3 text-sm leading-6 opacity-90">
               {snapshot.support}
             </p>
             <div className="mt-4 flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em]">
@@ -1553,18 +2157,22 @@ function HomeHabitCard({
         </div>
 
         <div className="space-y-3 border-t-2 border-current/15 pt-5">
-          <p className="text-sm leading-relaxed opacity-90">
-            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">
-              Rules:
-            </span>
-            {habit.rules}
-          </p>
-          <p className="text-sm leading-relaxed opacity-90">
-            <span className="mr-2 font-black uppercase tracking-[0.12em] text-current">
-              Motivation:
-            </span>
-            {habit.motivation}
-          </p>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className={`border-2 p-4 ${detailSurfaceClassName}`}>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-75">
+                Rules
+              </p>
+              <p className="mt-2 text-sm leading-6 opacity-90">{habit.rules}</p>
+            </div>
+            <div className={`border-2 p-4 ${detailSurfaceClassName}`}>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-75">
+                Motivation
+              </p>
+              <p className="mt-2 text-sm leading-6 opacity-90">
+                {habit.motivation}
+              </p>
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2">
             {habit.targetDays.map((day) => (
               <Badge key={`${habit._id}-${day}`} variant="outline">
@@ -1587,51 +2195,57 @@ function CoachContextRail({
 }) {
   return (
     <div
-      className={`grid gap-3 border-2 px-4 py-4 ${
+      className={`sticky top-4 z-10 grid gap-3 border-2 px-4 py-3 shadow-[6px_6px_0px_0px_rgba(26,24,20,0.15)] ${
         snapshot?.panelClassName ?? "border-black bg-secondary text-foreground"
       }`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <p className="brutal-meta text-current">Coach context</p>
             {snapshot ? <PressureBadge snapshot={snapshot} /> : null}
           </div>
           <p
-            className={`text-2xl font-black uppercase tracking-[-0.05em] ${snapshot?.panelToneClassName ?? ""}`}
+            className={`truncate text-xl font-black uppercase tracking-[-0.05em] ${snapshot?.panelToneClassName ?? ""}`}
           >
             {snapshot ? snapshot.habit.name : "No target habit today"}
           </p>
           <p
-            className={`text-sm uppercase tracking-[0.12em] opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
+            className={`text-sm leading-6 opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
           >
             {snapshot?.support ??
               "Use this space for bonus logs, planning, or review."}
           </p>
         </div>
-        {snapshot ? (
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onLoadPrompt(snapshot.chatPrompt)}
-          >
-            <Sparkles />
-            Load prompt
-          </Button>
-        ) : null}
+        <div className="flex flex-col gap-3 lg:items-end">
+          {snapshot ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onLoadPrompt(snapshot.chatPrompt)}
+            >
+              <Sparkles />
+              Load prompt
+            </Button>
+          ) : null}
+          {snapshot ? (
+            <div
+              className={`flex flex-wrap gap-3 text-[11px] font-black uppercase tracking-[0.18em] ${snapshot.panelToneClassName}`}
+            >
+              <span>
+                {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
+              </span>
+              <span>{snapshot.countdownLabel}</span>
+              <span>{snapshot.streakLabel}</span>
+            </div>
+          ) : null}
+        </div>
       </div>
       {snapshot ? (
-        <div className="space-y-3">
-          <div
-            className={`flex flex-wrap gap-3 text-xs font-black uppercase tracking-[0.18em] ${snapshot.panelToneClassName}`}
-          >
-            <span>
-              {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
-            </span>
-            <span>{snapshot.countdownLabel}</span>
-            <span>{snapshot.streakLabel}</span>
+        <div className="border-t-2 border-current/15 pt-3">
+          <div className="hidden sm:block">
+            <CountdownMeter snapshot={snapshot} compact />
           </div>
-          <CountdownMeter snapshot={snapshot} compact />
         </div>
       ) : null}
     </div>
@@ -1663,8 +2277,23 @@ function HomeTab({
   canAddHabit: boolean;
   onCreateHabit: (form: HabitFormState) => Promise<void>;
 }) {
-  const todayHabits = snapshots.filter((snapshot) => snapshot.scheduledToday);
   const orderedSnapshots = [...snapshots].sort(rankHabitSnapshots);
+  const primaryId = primarySnapshot?.habit._id ?? null;
+  const expandedSnapshots = orderedSnapshots.filter((snapshot) => {
+    const isPrimary = snapshot.habit._id === primaryId;
+    return (
+      isUrgentHomeSnapshot(snapshot) ||
+      !isCompactHomeSnapshot(snapshot, isPrimary)
+    );
+  });
+  const compactSnapshots = orderedSnapshots.filter((snapshot) => {
+    const isPrimary = snapshot.habit._id === primaryId;
+    return (
+      !isUrgentHomeSnapshot(snapshot) &&
+      isCompactHomeSnapshot(snapshot, isPrimary)
+    );
+  });
+  const hasExpanded = expandedSnapshots.length > 0;
 
   return (
     <div className="space-y-6">
@@ -1674,14 +2303,11 @@ function HomeTab({
           <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
             Home
           </h2>
-          <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-            Quick actions, current streaks, and today&apos;s targets.
-          </p>
         </div>
         <HabitComposerDialog disabled={!canAddHabit} onCreate={onCreateHabit} />
       </div>
 
-      {todayHabits.length === 0 ? (
+      {!hasExpanded ? (
         <Card className="bg-secondary">
           <CardContent className="flex flex-col gap-3 p-6">
             <p className="text-2xl font-black uppercase tracking-[-0.05em]">
@@ -1695,20 +2321,57 @@ function HomeTab({
         </Card>
       ) : null}
 
-      {orderedSnapshots.map((snapshot) => (
-        <HomeHabitCard
-          key={snapshot.habit._id}
-          snapshot={snapshot}
-          isPrimary={primarySnapshot?.habit._id === snapshot.habit._id}
-          pendingHabitId={pendingHabitId}
-          onOpenChat={onOpenChat}
-          onMarkComplete={onMarkComplete}
-          onLogMiss={onLogMiss}
-          onToggleActive={onToggleActive}
-          onDeleteHabit={onDeleteHabit}
-          onOpenDetail={onOpenDetail}
-        />
-      ))}
+      {expandedSnapshots.length > 0 ? (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3 border-b-2 border-black pb-2">
+            <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-muted-foreground">
+              Pressure board
+            </p>
+          </div>
+          <div className="space-y-3">
+            {expandedSnapshots.map((snapshot) => (
+              <HomeHabitCard
+                key={snapshot.habit._id}
+                snapshot={snapshot}
+                isPrimary={primarySnapshot?.habit._id === snapshot.habit._id}
+                pendingHabitId={pendingHabitId}
+                onOpenChat={onOpenChat}
+                onMarkComplete={onMarkComplete}
+                onLogMiss={onLogMiss}
+                onToggleActive={onToggleActive}
+                onDeleteHabit={onDeleteHabit}
+                onOpenDetail={onOpenDetail}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {compactSnapshots.length > 0 ? (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3 border-b-2 border-black/50 pb-2">
+            <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-muted-foreground">
+              Safe states
+            </p>
+          </div>
+          <div className="space-y-3">
+            {compactSnapshots.map((snapshot) => (
+              <HomeHabitCard
+                key={snapshot.habit._id}
+                snapshot={snapshot}
+                isPrimary={primarySnapshot?.habit._id === snapshot.habit._id}
+                pendingHabitId={pendingHabitId}
+                onOpenChat={onOpenChat}
+                onMarkComplete={onMarkComplete}
+                onLogMiss={onLogMiss}
+                onToggleActive={onToggleActive}
+                onDeleteHabit={onDeleteHabit}
+                onOpenDetail={onOpenDetail}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -1860,19 +2523,19 @@ function ChatTab({
       </div>
 
       <Card>
-        <CardContent className="space-y-4 p-4">
+        <CardContent className="space-y-4 p-4 sm:p-5">
           <CoachContextRail
             snapshot={primarySnapshot}
             onLoadPrompt={setInput}
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-black bg-secondary px-4 py-3 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-            <span className="max-w-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-black bg-black px-4 py-3 text-sm text-white shadow-[4px_4px_0px_0px_rgba(26,24,20,1)]">
+            <span className="max-w-xl text-[11px] font-bold uppercase tracking-[0.18em] text-white/80">
               {budgetStatus?.isUnlimited
                 ? "Pro tier: unlimited daily coach messages."
                 : `Daily budget: ${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
             </span>
-            <span className="text-lg font-black text-foreground">
+            <span className="text-lg font-black text-white">
               {budgetStatus?.isUnlimited
                 ? "Unlimited"
                 : `${budgetStatus?.remainingMessages ?? 20} left`}
@@ -1885,7 +2548,7 @@ function ChatTab({
                 You burned through today&apos;s free chat budget. Read-only
                 still works. Upgrade if you want more messages right now.
               </p>
-              <div>
+              <div className="pt-1">
                 <Button
                   type="button"
                   disabled={billingPending !== null}
@@ -1905,7 +2568,7 @@ function ChatTab({
 
           <div
             ref={scrollContainerRef}
-            className="max-h-112 overflow-y-auto border-2 border-black bg-background px-4 pr-1"
+            className="max-h-128 overflow-y-auto border-2 border-black bg-background px-3 py-2 sm:px-4"
           >
             {sortedMessages.length === 0 ? (
               <div className="border-b border-dashed border-black py-4 text-sm leading-relaxed text-muted-foreground">
@@ -1917,42 +2580,63 @@ function ChatTab({
             {sortedMessages.map((message) => (
               <div
                 key={message._id}
-                className={`border-b border-dashed border-black ${message.role === "ai" ? "bg-black/40 p-4 text-sm" : "py-4 text-sm"}`}
+                className={`border-b border-dashed border-black py-3 text-sm ${
+                  message.role === "ai" ? "pl-0 pr-0" : "pl-0 pr-0"
+                }`}
               >
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                  <span
-                    className={
-                      message.role === "ai"
-                        ? "border border-black bg-black px-1 py-0.5 text-white"
-                        : "border border-black px-1 py-0.5 text-black"
-                    }
-                  >
-                    {message.role === "ai" ? "Coach" : "You"}
-                  </span>
-                  <span>{formatMessageTime(message.timestamp)}</span>
-                </div>
-                <p
-                  className={`leading-7 ${message.role === "ai" ? "font-bold text-foreground" : "text-foreground"}`}
+                <div
+                  className={`${
+                    message.role === "ai"
+                      ? "mr-0 border-2 border-black bg-secondary px-4 py-4 shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)] sm:mr-6"
+                      : "ml-0 border-2 border-black bg-background px-4 py-4 sm:ml-10"
+                  }`}
                 >
-                  {message.content}
-                </p>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                    <span
+                      className={
+                        message.role === "ai"
+                          ? "border border-black bg-black px-2 py-1 text-white"
+                          : "border border-black bg-white px-2 py-1 text-black"
+                      }
+                    >
+                      {message.role === "ai" ? "Coach" : "You"}
+                    </span>
+                    <span className="font-bold">
+                      {formatMessageTime(message.timestamp)}
+                    </span>
+                  </div>
+                  <p
+                    className={`leading-7 ${
+                      message.role === "ai"
+                        ? "font-bold text-foreground"
+                        : "text-foreground"
+                    }`}
+                  >
+                    {message.content}
+                  </p>
+                </div>
               </div>
             ))}
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {quickActions.map((action) => (
-              <Button
-                key={action.key}
-                type="button"
-                variant={action.variant}
-                disabled={sending || limitReached}
-                onClick={() => void action.onClick()}
-              >
-                {action.icon}
-                {action.label}
-              </Button>
-            ))}
+          <div className="border-t-2 border-black/10 pt-1">
+            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
+              Quick actions
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {quickActions.map((action) => (
+                <Button
+                  key={action.key}
+                  type="button"
+                  variant={action.variant}
+                  disabled={sending || limitReached}
+                  onClick={() => void action.onClick()}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              ))}
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -1996,6 +2680,8 @@ function ChatTab({
 function StatsTab({
   habits,
   checkIns,
+  habitSkips,
+  reminderRuns,
   workoutLogs,
   latestReport,
   referenceDate,
@@ -2003,6 +2689,8 @@ function StatsTab({
 }: {
   habits: HabitDoc[];
   checkIns: CheckInDoc[];
+  habitSkips: HabitSkipDoc[];
+  reminderRuns: ReminderRunDoc[];
   workoutLogs: WorkoutLogDoc[];
   latestReport: WeeklyReportDoc | null;
   referenceDate: Date;
@@ -2013,8 +2701,15 @@ function StatsTab({
   const weekEnd = weekDays[6]?.date ?? referenceDate;
   const weekStartTs = weekStart.getTime();
   const weekEndTs = new Date(weekEnd).setHours(23, 59, 59, 999);
+  const weekDateKeys = new Set(weekDays.map((day) => day.dateKey));
   const weeklyCheckIns = checkIns.filter(
     (entry) => entry.timestamp >= weekStartTs && entry.timestamp <= weekEndTs,
+  );
+  const weeklySkips = habitSkips.filter((entry) =>
+    weekDateKeys.has(entry.date),
+  );
+  const weeklyReminderRuns = reminderRuns.filter((entry) =>
+    weekDateKeys.has(entry.date),
   );
   const activeHabits = habits.filter((habit) => habit.isActive);
   const bestStreak = Math.max(
@@ -2111,21 +2806,22 @@ function StatsTab({
         habit,
         day,
         weeklyCheckIns,
-        referenceDate,
-      );
+        weeklySkips,
+        weeklyReminderRuns,
+      ).state;
       if (cellState === "missed") hasMiss = true;
       else if (cellState === "scheduled") hasPending = true;
       else if (cellState === "completed" || cellState === "bonus") completed++;
     });
 
     if (isToday && missedTodayCount > 0) hasMiss = true;
+    if (isFuture) return { day, status: "future" as const };
     if (!isToday && hasPending) hasMiss = true;
 
     if (hasMiss) {
       weekMisses++;
       return { day, status: "missed" as const };
     }
-    if (isFuture) return { day, status: "future" as const };
     if (isToday && hasPending) return { day, status: "pending" as const };
     if (completed === scheduled.length && scheduled.length > 0)
       return { day, status: "perfect" as const };
@@ -2140,12 +2836,12 @@ function StatsTab({
           Stats
         </h2>
         <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
-          System performance feedback and recent workout logs.
+          System performance feedback and recent habit logs.
         </p>
       </div>
 
-      <div className="flex flex-col gap-6 border-b-2 border-black pb-8 pt-4">
-        <div className="space-y-1">
+      <div className="grid gap-6 border-b-2 border-black pb-8 pt-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <div className="space-y-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
             Today Focus
           </p>
@@ -2154,22 +2850,26 @@ function StatsTab({
           >
             {todayFocusLabel}
           </h3>
+          <p className="max-w-xl text-sm leading-6 text-muted-foreground">
+            This panel should answer the week in one glance: where you missed,
+            where you are clean, and whether today is still salvageable.
+          </p>
         </div>
 
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-7 gap-2">
             {boxes.map(({ day, status }) => {
               const isToday = day.dateKey === todayStr;
               const style =
                 status === "missed"
-                  ? "bg-[#DF3B23] text-white border-black"
+                  ? "bg-[#DF3B23] text-white border-black shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)]"
                   : status === "perfect"
                     ? "bg-black text-white border-black"
                     : status === "pending"
                       ? "bg-background text-foreground border-black border-[3px]"
                       : status === "future"
                         ? "bg-background text-transparent border-dashed border-black/30"
-                        : "bg-secondary text-transparent border-transparent";
+                        : "bg-secondary text-muted-foreground/70 border-black/20";
 
               const todayMarker = isToday
                 ? "ring-[3px] ring-foreground ring-offset-2 ring-offset-background"
@@ -2178,19 +2878,43 @@ function StatsTab({
               return (
                 <div
                   key={day.dateKey}
-                  className={`flex h-12 w-12 items-center justify-center border-2 font-bold uppercase ${style} ${todayMarker}`}
+                  className={`grid min-h-20 border-2 p-2 font-bold uppercase ${style} ${todayMarker}`}
                 >
-                  <span className="text-xs">{day.label.charAt(0)}</span>
+                  <div className="flex items-start justify-between">
+                    <span className="text-[10px]">{day.label}</span>
+                    <span className="text-[9px] opacity-70">
+                      {day.dateKey.slice(8)}
+                    </span>
+                  </div>
+                  <div className="mt-auto text-xs font-black tracking-[0.16em]">
+                    {status === "missed"
+                      ? "MISS"
+                      : status === "perfect"
+                        ? "DONE"
+                        : status === "pending"
+                          ? "LIVE"
+                          : status === "future"
+                            ? "--"
+                            : "REST"}
+                  </div>
                 </div>
               );
             })}
           </div>
-          <p className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
-            THIS WEEK:{" "}
-            {weekMisses === 0
-              ? "CLEAN"
-              : `${weekMisses} MISS${weekMisses > 1 ? "ES" : ""}`}
-          </p>
+          <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+            <span className="border-2 border-black bg-background px-3 py-2">
+              Week status:{" "}
+              {weekMisses === 0
+                ? "Clean"
+                : `${weekMisses} miss${weekMisses > 1 ? "es" : ""}`}
+            </span>
+            <span className="border-2 border-black bg-background px-3 py-2">
+              Pending today: {pendingTodayCount}
+            </span>
+            <span className="border-2 border-black bg-background px-3 py-2">
+              Missed today: {missedTodayCount}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -2238,7 +2962,7 @@ function StatsTab({
           </p>
         </div>
 
-        <div className="border-2 border-black bg-background p-5 sm:col-span-2 xl:col-span-4">
+        <div className="border-2 border-black bg-background p-5 sm:col-span-2 xl:col-span-1">
           <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
             Bonus
           </p>
@@ -2250,7 +2974,7 @@ function StatsTab({
       </div>
 
       {latestReport ? (
-        <Card className="bg-secondary">
+        <Card className="border-2 border-black bg-secondary shadow-[8px_8px_0px_0px_rgba(26,24,20,1)]">
           <CardHeader>
             <CardTitle className="text-2xl">Latest Weekly Review</CardTitle>
           </CardHeader>
@@ -2325,21 +3049,20 @@ function StatsTab({
                 habit={habit}
                 weekDays={weekDays}
                 weeklyCheckIns={weeklyCheckIns}
+                weeklySkips={weeklySkips}
+                weeklyReminderRuns={weeklyReminderRuns}
                 referenceDate={referenceDate}
               />
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-sm uppercase tracking-[0.25em] text-muted-foreground">
-                    Recent workouts
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Bonus workouts are included here.
+                    Recent habit logs
                   </p>
                 </div>
                 {recentLogs.length === 0 ? (
                   <div className="border-2 border-dashed border-black bg-background p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                    No workout logs yet for this habit.
+                    No recent logs yet for this habit.
                   </div>
                 ) : (
                   <div className="grid gap-3">
@@ -2388,6 +3111,8 @@ function HabitDetailPanel({
   open,
   habit,
   allCheckIns,
+  allHabitSkips,
+  allReminderRuns,
   allWorkoutLogs,
   referenceDate,
   saving,
@@ -2397,6 +3122,8 @@ function HabitDetailPanel({
   open: boolean;
   habit: HabitDoc | null;
   allCheckIns: CheckInDoc[];
+  allHabitSkips: HabitSkipDoc[];
+  allReminderRuns: ReminderRunDoc[];
   allWorkoutLogs: WorkoutLogDoc[];
   referenceDate: Date;
   saving: boolean;
@@ -2420,11 +3147,18 @@ function HabitDetailPanel({
   const weekEnd = weekDays[6]?.date ?? referenceDate;
   const weekStartTs = weekStart.getTime();
   const weekEndTs = new Date(weekEnd).setHours(23, 59, 59, 999);
+  const weekDateKeys = new Set(weekDays.map((day) => day.dateKey));
   const habitCheckIns = allCheckIns
     .filter((entry) => entry.habitId === habit._id)
     .sort((left, right) => right.timestamp - left.timestamp);
   const weeklyCheckIns = habitCheckIns.filter(
     (entry) => entry.timestamp >= weekStartTs && entry.timestamp <= weekEndTs,
+  );
+  const weeklySkips = allHabitSkips.filter(
+    (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
+  );
+  const weeklyReminderRuns = allReminderRuns.filter(
+    (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
   );
   const recentLogs = allWorkoutLogs
     .filter((log) => log.habitId === habit._id)
@@ -2610,80 +3344,6 @@ function HabitDetailPanel({
                   <span>{form.isActive ? "Habit active" : "Habit paused"}</span>
                 </label>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-xl">Friday Override</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    <label className="flex items-center gap-3 border-2 border-black bg-background px-4 py-3 text-sm uppercase">
-                      <Checkbox
-                        checked={form.fridayOverrideEnabled}
-                        onCheckedChange={(value) =>
-                          updateForm("fridayOverrideEnabled", Boolean(value))
-                        }
-                      />
-                      <span>
-                        {form.fridayOverrideEnabled
-                          ? "Custom Friday schedule enabled"
-                          : "Use default Friday schedule"}
-                      </span>
-                    </label>
-
-                    {form.fridayOverrideEnabled ? (
-                      <div className="grid gap-4 sm:grid-cols-3">
-                        <div className="grid gap-2">
-                          <Label htmlFor="friday-scheduled-time">
-                            Friday scheduled
-                          </Label>
-                          <Input
-                            id="friday-scheduled-time"
-                            type="time"
-                            value={form.fridayScheduledTime}
-                            onChange={(event) =>
-                              updateForm(
-                                "fridayScheduledTime",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="friday-reminder-time">
-                            Friday reminder
-                          </Label>
-                          <Input
-                            id="friday-reminder-time"
-                            type="time"
-                            value={form.fridayReminderTime}
-                            onChange={(event) =>
-                              updateForm(
-                                "fridayReminderTime",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="friday-deadline-time">
-                            Friday deadline
-                          </Label>
-                          <Input
-                            id="friday-deadline-time"
-                            type="time"
-                            value={form.fridayCheckInDeadline}
-                            onChange={(event) =>
-                              updateForm(
-                                "fridayCheckInDeadline",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-                    ) : null}
-                  </CardContent>
-                </Card>
-
                 <div className="flex justify-end">
                   <Button
                     type="button"
@@ -2742,28 +3402,6 @@ function HabitDetailPanel({
                   ))}
                 </div>
               </div>
-              <div className="sm:col-span-3 border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Friday override
-                </p>
-                {habit.schedules?.fri ? (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    <p className="text-lg font-black">
-                      {habit.schedules.fri.scheduledTime}
-                    </p>
-                    <p className="text-lg font-black">
-                      {habit.schedules.fri.reminderTime}
-                    </p>
-                    <p className="text-lg font-black">
-                      {habit.schedules.fri.checkInDeadline}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    Friday uses the default schedule.
-                  </p>
-                )}
-              </div>
             </CardContent>
           </Card>
 
@@ -2806,6 +3444,8 @@ function HabitDetailPanel({
                 habit={currentHabit}
                 weekDays={weekDays}
                 weeklyCheckIns={weeklyCheckIns}
+                weeklySkips={weeklySkips}
+                weeklyReminderRuns={weeklyReminderRuns}
                 referenceDate={referenceDate}
               />
             </CardContent>
@@ -2855,12 +3495,12 @@ function HabitDetailPanel({
 
           <Card className="bg-background">
             <CardHeader>
-              <CardTitle className="text-2xl">Recent Workout Logs</CardTitle>
+              <CardTitle className="text-2xl">Recent Logs</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3">
               {recentLogs.length === 0 ? (
                 <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                  No workout logs yet for this habit.
+                  No recent logs yet for this habit.
                 </div>
               ) : (
                 recentLogs.map((log) => {
@@ -2980,7 +3620,7 @@ function ProfileTab({
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_0.95fr]">
         <Card>
           <CardHeader className="flex flex-row items-start justify-between">
             <div className="space-y-2">
@@ -2991,104 +3631,152 @@ function ProfileTab({
             </div>
             <UserButton />
           </CardHeader>
-          <CardContent className="space-y-4 text-sm text-muted-foreground">
-            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
-              <span>Current tier</span>
-              <Badge className="bg-black text-white">
-                {tier.toUpperCase()}
-              </Badge>
-            </div>
-            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
-              <span>Daily messages used</span>
-              <span className="font-black text-foreground">
-                {budgetStatus?.isUnlimited
-                  ? "Unlimited"
-                  : `${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
-              </span>
-            </div>
-            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
-              <span>Messages remaining</span>
-              <span className="font-black text-foreground">
-                {budgetStatus?.isUnlimited
-                  ? "Unlimited"
-                  : (budgetStatus?.remainingMessages ?? 20)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
-              <span>AI mode</span>
-              <span className="font-black text-foreground">
-                {aiDisabled ? "Disabled" : "Enabled"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
-              <span>Reminder notifications</span>
-              <span className="font-black text-foreground">
-                {notificationPermission === "unsupported"
-                  ? "Unsupported"
-                  : notificationsEnabled
-                    ? "Enabled"
-                    : notificationPermission === "denied"
-                      ? "Blocked"
-                      : "Disabled"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between border-2 border-black bg-background px-4 py-3 uppercase tracking-[0.12em]">
-              <span>Theme mode</span>
-              <span className="font-black text-foreground">{theme}</span>
-            </div>
-            <Button type="button" variant="outline" onClick={onToggleTheme}>
-              {theme === "dark" ? <SunMedium /> : <MonitorCog />}
-              {theme === "dark" ? "Switch to Light" : "Switch to Dark"}
-            </Button>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                disabled={billingPending !== null}
-                onClick={() => void onUpgrade()}
-              >
-                {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
-              </Button>
-              {IS_DEV_MODE ? (
+          <CardContent className="space-y-5 text-sm text-muted-foreground">
+            <section className="space-y-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
+                Account and plan
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="border-2 border-black bg-background px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Current tier
+                  </p>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-lg font-black text-foreground">
+                      {tier.toUpperCase()}
+                    </span>
+                    <Badge className="bg-black text-white">Live</Badge>
+                  </div>
+                </div>
+                <div className="border-2 border-black bg-background px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    AI mode
+                  </p>
+                  <p className="mt-2 text-lg font-black text-foreground">
+                    {aiDisabled ? "Disabled" : "Enabled"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  disabled={billingPending !== null}
+                  onClick={() => void onUpgrade()}
+                >
+                  {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
+                </Button>
+                {IS_DEV_MODE ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={billingPending !== null}
+                    onClick={() => void onDowngrade()}
+                  >
+                    {billingPending === "free" ? "Updating..." : "Downgrade"}
+                  </Button>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="space-y-3 border-t-2 border-black pt-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
+                Usage and system
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="border-2 border-black bg-background px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Daily messages used
+                  </p>
+                  <p className="mt-2 text-lg font-black text-foreground">
+                    {budgetStatus?.isUnlimited
+                      ? "Unlimited"
+                      : `${budgetStatus?.dailyMessageCount ?? 0}/${budgetStatus?.dailyMessageCap ?? 20}`}
+                  </p>
+                </div>
+                <div className="border-2 border-black bg-background px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Messages remaining
+                  </p>
+                  <p className="mt-2 text-lg font-black text-foreground">
+                    {budgetStatus?.isUnlimited
+                      ? "Unlimited"
+                      : (budgetStatus?.remainingMessages ?? 20)}
+                  </p>
+                </div>
+                <div className="border-2 border-black bg-background px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Reminder notifications
+                  </p>
+                  <p className="mt-2 text-lg font-black text-foreground">
+                    {notificationPermission === "unsupported"
+                      ? "Unsupported"
+                      : notificationsEnabled
+                        ? "Enabled"
+                        : notificationPermission === "denied"
+                          ? "Blocked"
+                          : "Disabled"}
+                  </p>
+                </div>
+                <div className="border-2 border-black bg-background px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Theme mode
+                  </p>
+                  <p className="mt-2 text-lg font-black text-foreground">
+                    {theme}
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-3 border-t-2 border-black pt-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
+                Controls
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={onToggleTheme}>
+                  {theme === "dark" ? <SunMedium /> : <MonitorCog />}
+                  {theme === "dark" ? "Switch to Light" : "Switch to Dark"}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={billingPending !== null}
-                  onClick={() => void onDowngrade()}
+                  disabled={
+                    notificationPending ||
+                    notificationPermission === "unsupported"
+                  }
+                  onClick={() => void onEnableNotifications()}
                 >
-                  {billingPending === "free" ? "Updating..." : "Downgrade"}
+                  {notificationPending
+                    ? "Enabling..."
+                    : notificationsEnabled
+                      ? "Notifications Enabled"
+                      : notificationPermission === "denied"
+                        ? "Notifications Blocked"
+                        : "Enable Reminders"}
                 </Button>
+              </div>
+              {IS_DEV_MODE ? (
+                <div className="border-2 border-dashed border-black bg-background p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Dev tools
+                  </p>
+                  <div className="mt-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={aiTogglePending}
+                      onClick={() => void onToggleAiDisabled()}
+                    >
+                      {aiTogglePending
+                        ? "Saving..."
+                        : aiDisabled
+                          ? "Enable AI"
+                          : "Disable AI"}
+                    </Button>
+                  </div>
+                </div>
               ) : null}
-            </div>
-            {IS_DEV_MODE ? (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={aiTogglePending}
-                onClick={() => void onToggleAiDisabled()}
-              >
-                {aiTogglePending
-                  ? "Saving..."
-                  : aiDisabled
-                    ? "Enable AI"
-                    : "Disable AI"}
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              disabled={
-                notificationPending || notificationPermission === "unsupported"
-              }
-              onClick={() => void onEnableNotifications()}
-            >
-              {notificationPending
-                ? "Enabling..."
-                : notificationsEnabled
-                  ? "Notifications Enabled"
-                  : notificationPermission === "denied"
-                    ? "Notifications Blocked"
-                    : "Enable Reminders"}
-            </Button>
+            </section>
           </CardContent>
         </Card>
 
@@ -3247,6 +3935,14 @@ export function DashboardShell() {
     api.checkIns.listByUser,
     convexUser ? { userId: convexUser._id } : "skip",
   );
+  const habitSkips = useQuery(
+    api.habitSkips.listByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+  const reminderRuns = useQuery(
+    api.reminders.listRunsByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
   const workoutLogs = useQuery(
     api.workoutLogs.listByUser,
     convexUser ? { userId: convexUser._id } : "skip",
@@ -3257,6 +3953,10 @@ export function DashboardShell() {
   );
   const messages = useQuery(
     api.messages.listByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+  const agentTasks = useQuery(
+    api.agentTasks.listByUser,
     convexUser ? { userId: convexUser._id } : "skip",
   );
 
@@ -3509,12 +4209,18 @@ export function DashboardShell() {
     [todayCheckIns],
   );
   const resolvedAllCheckIns = useMemo(() => allCheckIns ?? [], [allCheckIns]);
+  const resolvedHabitSkips = useMemo(() => habitSkips ?? [], [habitSkips]);
+  const resolvedReminderRuns = useMemo(
+    () => reminderRuns ?? [],
+    [reminderRuns],
+  );
   const resolvedWorkoutLogs = useMemo(() => workoutLogs ?? [], [workoutLogs]);
   const resolvedWeeklyReports = useMemo(
     () => weeklyReports ?? [],
     [weeklyReports],
   );
   const resolvedMessages = useMemo(() => messages ?? [], [messages]);
+  const resolvedAgentTasks = useMemo(() => agentTasks ?? [], [agentTasks]);
   const resolvedMessageBudgetStatus = messageBudgetStatus ?? null;
   const latestWeeklyReport = resolvedWeeklyReports[0] ?? null;
   const selectedHabit =
@@ -3904,7 +4610,26 @@ export function DashboardShell() {
     }
   }
 
-  if (!isLoaded || convexUser === undefined || habits === undefined) {
+  function handleHighlightCardAction(card: HighlightAlertCard) {
+    if (card.kind === "habit") {
+      setChatInput(card.snapshot.chatPrompt);
+    } else {
+      const taskTime = card.task.time ? ` at ${card.task.time}` : "";
+      setChatInput(
+        `Help me execute this task: ${card.task.title} on ${card.task.date}${taskTime}.`,
+      );
+    }
+    setActiveTab("chat");
+  }
+
+  if (
+    !isLoaded ||
+    convexUser === undefined ||
+    habits === undefined ||
+    habitSkips === undefined ||
+    reminderRuns === undefined ||
+    agentTasks === undefined
+  ) {
     return (
       <main className="min-h-screen bg-background px-6 py-10 text-foreground">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-center border-2 border-black bg-card p-10 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)]">
@@ -3942,12 +4667,13 @@ export function DashboardShell() {
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-28">
         <section className="border-2 border-black bg-card p-6 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-8">
           <SummaryStatusCard
-            snapshot={primaryHabitSnapshot}
+            snapshots={habitSnapshots}
+            tasks={resolvedAgentTasks}
             scheduledToday={scheduledToday}
             completedToday={completedToday}
             subscriptionTier={convexUser.subscriptionTier}
             currentTime={now}
-            onPrimaryAction={() => setActiveTab("chat")}
+            onPrimaryAction={handleHighlightCardAction}
           />
         </section>
 
@@ -3988,6 +4714,8 @@ export function DashboardShell() {
           <StatsTab
             habits={resolvedHabits}
             checkIns={resolvedAllCheckIns}
+            habitSkips={resolvedHabitSkips}
+            reminderRuns={resolvedReminderRuns}
             workoutLogs={resolvedWorkoutLogs}
             latestReport={latestWeeklyReport}
             referenceDate={now}
@@ -4024,6 +4752,8 @@ export function DashboardShell() {
         open={Boolean(selectedHabit)}
         habit={selectedHabit}
         allCheckIns={resolvedAllCheckIns}
+        allHabitSkips={resolvedHabitSkips}
+        allReminderRuns={resolvedReminderRuns}
         allWorkoutLogs={resolvedWorkoutLogs}
         referenceDate={now}
         saving={detailSaving}

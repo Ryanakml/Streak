@@ -12,6 +12,7 @@
     "seed:phase3": "node scripts/seed-phase3-verification.mjs",
     "seed:phase4": "node scripts/seed-phase4-verification.mjs",
     "seed:phase5": "node scripts/seed-phase5-verification.mjs",
+    "seed:ui": "node scripts/seed-ui-demo.mjs",
     "phase3:process-reminders": "node scripts/process-phase3-reminders.mjs",
     "phase3:refresh-memory": "node scripts/refresh-phase3-memory.mjs",
     "phase4:process-reminders": "node scripts/process-phase4-reminders.mjs",

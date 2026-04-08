@@ -544,6 +544,17 @@ export const listByUser = query({
   },
 });
 
+export const listRunsByUser = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await requireOwnedUser(ctx, args.userId);
+    return await ctx.db
+      .query("reminderRuns")
+      .withIndex("by_user_date", (q) => q.eq("userId", args.userId))
+      .collect();
+  },
+});
+
 export const listScheduled = query({
   args: { before: v.number(), sent: v.boolean() },
   handler: async (ctx, args) => {
