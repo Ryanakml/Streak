@@ -3784,8 +3784,6 @@ function ProfileTab({
           <CardHeader>
             <CardTitle className="text-2xl">Stats Readout</CardTitle>
           </CardHeader>
-          also yang missed itu bikin beda warna sama warning overdue, also
-          buttonnya bel
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <div
               className={`border-2 border-black bg-background p-5 ${missedCount === 0 ? "sm:col-span-2" : ""}`}
