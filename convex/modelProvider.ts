@@ -5,7 +5,8 @@ const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GEMINI_API_URL =
   "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_MODEL = "gemini-2.5-flash";
-const DIGITALOCEAN_INFERENCE_URL = "https://inference.do-ai.run/v1/chat/completions";
+const DIGITALOCEAN_INFERENCE_URL =
+  "https://inference.do-ai.run/v1/chat/completions";
 const DIGITALOCEAN_PRIMARY_DEFAULT_MODEL = "deepseek-r1-distill-llama-70b";
 const DIGITALOCEAN_SECONDARY_DEFAULT_MODEL = "alibaba-qwen3-32b";
 
@@ -20,6 +21,9 @@ export type ModelAttemptTrace = {
   attemptOrder: number;
   status: "success" | "failed";
   errorSummary?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedCostUsd?: number;
 };
 
 export type ModelRunTrace = {
@@ -27,12 +31,88 @@ export type ModelRunTrace = {
   finalModel: string;
   fallbackDepth: number;
   attempts: ModelAttemptTrace[];
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedCostUsd?: number;
 };
 
 export type ModelCallResult = {
   content: string;
   trace: ModelRunTrace;
 };
+
+type ModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+};
+
+type ProviderCallResult = {
+  content: string;
+  usage?: ModelUsage;
+};
+
+const DIGITALOCEAN_MODEL_PRICING_USD_PER_TOKEN = {
+  "deepseek-r1-distill-llama-70b": {
+    input: 0.99 / 1_000_000,
+    output: 0.99 / 1_000_000,
+  },
+  "alibaba-qwen3-32b": {
+    input: 0.25 / 1_000_000,
+    output: 0.55 / 1_000_000,
+  },
+  "qwen3-32b": {
+    input: 0.25 / 1_000_000,
+    output: 0.55 / 1_000_000,
+  },
+} as const;
+
+function resolveDigitalOceanPricing(model: string) {
+  const normalizedModel = model.trim().toLowerCase();
+  const direct =
+    DIGITALOCEAN_MODEL_PRICING_USD_PER_TOKEN[
+      normalizedModel as keyof typeof DIGITALOCEAN_MODEL_PRICING_USD_PER_TOKEN
+    ];
+  if (direct) {
+    return direct;
+  }
+
+  if (normalizedModel.includes("deepseek-r1-distill-llama-70b")) {
+    return DIGITALOCEAN_MODEL_PRICING_USD_PER_TOKEN[
+      "deepseek-r1-distill-llama-70b"
+    ];
+  }
+
+  if (normalizedModel.includes("qwen3-32b")) {
+    return DIGITALOCEAN_MODEL_PRICING_USD_PER_TOKEN["qwen3-32b"];
+  }
+
+  return null;
+}
+
+function roundUsd(value: number) {
+  return Number(value.toFixed(10));
+}
+
+function buildDigitalOceanUsage(args: {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+}) {
+  const pricing = resolveDigitalOceanPricing(args.model);
+  if (!pricing) {
+    return null;
+  }
+
+  return {
+    inputTokens: args.promptTokens,
+    outputTokens: args.completionTokens,
+    estimatedCostUsd: roundUsd(
+      args.promptTokens * pricing.input +
+        args.completionTokens * pricing.output,
+    ),
+  } satisfies ModelUsage;
+}
 
 function buildDigitalOceanMessages(
   messages: ModelMessage[],
@@ -138,7 +218,9 @@ async function callGemini(
     throw new Error("Gemini response did not include message content");
   }
 
-  return content;
+  return {
+    content,
+  } satisfies ProviderCallResult;
 }
 
 async function callDigitalOceanChatCompletion(
@@ -191,6 +273,12 @@ async function callDigitalOceanChatCompletion(
 
   const payload = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+    };
   };
 
   const content = payload.choices?.[0]?.message?.content?.trim();
@@ -200,7 +288,23 @@ async function callDigitalOceanChatCompletion(
     );
   }
 
-  return content;
+  const promptTokens =
+    payload.usage?.prompt_tokens ?? payload.usage?.input_tokens;
+  const completionTokens =
+    payload.usage?.completion_tokens ?? payload.usage?.output_tokens;
+  const usage =
+    typeof promptTokens === "number" && typeof completionTokens === "number"
+      ? (buildDigitalOceanUsage({
+          model,
+          promptTokens,
+          completionTokens,
+        }) ?? undefined)
+      : undefined;
+
+  return {
+    content,
+    usage,
+  } satisfies ProviderCallResult;
 }
 
 function getDigitalOceanPrimaryModel() {
@@ -266,14 +370,16 @@ async function callGroqChatCompletion(
     throw new Error("Groq response did not include message content");
   }
 
-  return content;
+  return {
+    content,
+  } satisfies ProviderCallResult;
 }
 
 type ProviderAttempt = {
   label: string;
   provider: string;
   model: string;
-  call: () => Promise<string>;
+  call: () => Promise<ProviderCallResult>;
 };
 
 async function runProviderChain(
@@ -290,20 +396,26 @@ async function runProviderChain(
     }
 
     try {
-      const content = await attempt.call();
+      const result = await attempt.call();
       traceAttempts.push({
         provider: attempt.provider,
         model: attempt.model,
         attemptOrder: index + 1,
         status: "success",
+        inputTokens: result.usage?.inputTokens,
+        outputTokens: result.usage?.outputTokens,
+        estimatedCostUsd: result.usage?.estimatedCostUsd,
       });
       return {
-        content,
+        content: result.content,
         trace: {
           finalProvider: attempt.provider,
           finalModel: attempt.model,
           fallbackDepth: index,
           attempts: traceAttempts,
+          inputTokens: result.usage?.inputTokens,
+          outputTokens: result.usage?.outputTokens,
+          estimatedCostUsd: result.usage?.estimatedCostUsd,
         },
       };
     } catch (error) {

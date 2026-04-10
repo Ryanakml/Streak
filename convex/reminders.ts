@@ -18,6 +18,11 @@ const REMINDER_MESSAGE_INTENT = {
   check_in: "reminder_check_in",
   late_follow_up: "reminder_late_follow_up",
 } as const;
+const REMINDER_STAGE_ORDER = [
+  "pre_workout",
+  "check_in",
+  "late_follow_up",
+] as const;
 
 type ReminderType = keyof typeof REMINDER_MESSAGE_INTENT;
 type ReminderRunState =
@@ -30,6 +35,63 @@ type ReminderRunState =
   | "missed"
   | "rescheduled"
   | "skipped";
+
+type ReminderLanguageHint = "indonesian" | "english";
+type ReminderDeliveryKind = "stage_reminder" | "completion_interrupt";
+type ReminderTimelinePoint = "post" | "due" | "deadline";
+type ReminderInteractionHistory =
+  | "fresh"
+  | "ghosting"
+  | "hesitating"
+  | "active_responder"
+  | "promised_but_stalling"
+  | "silent_completion";
+type ReminderAgitationLevel = "low" | "medium" | "high";
+type ReminderStageHistoryItem = {
+  reminderType: ReminderType;
+  timelinePoint: ReminderTimelinePoint;
+  scheduledFor: number;
+  sent: boolean;
+  responseCode: "R" | "D";
+  userMessageCount: number;
+  userIntent: string | null;
+  userSummary: string | null;
+};
+
+type ReminderRewriteContext = {
+  deliveryKind: ReminderDeliveryKind;
+  habitName: string;
+  habitRules: string;
+  motivation: string;
+  reminderType: ReminderType;
+  currentTimelinePoint: ReminderTimelinePoint;
+  reminderDate: string;
+  scheduledTime: string;
+  deadline: string;
+  scheduledDeltaMinutes: number;
+  deadlineDeltaMinutes: number;
+  currentStreak: number;
+  bestStreak: number;
+  missedLast7d: number;
+  lastCheckInStatus: string | null;
+  recentMissReasons: string[];
+  memorySignal: string | null;
+  reminderRunState: ReminderRunState | null;
+  todayPendingTypes: ReminderType[];
+  todaySentTypes: ReminderType[];
+  languageHint: ReminderLanguageHint;
+  interactionHistory: ReminderInteractionHistory;
+  responsePattern: string;
+  stageHistory: ReminderStageHistoryItem[];
+  lastUserResponseIntent: string | null;
+  lastUserResponseSummary: string | null;
+  isAggravated: boolean;
+  agitationLevel: ReminderAgitationLevel;
+  voiceDirectives: string[];
+  styleSeed: number;
+  completionStatus: "none" | "completed" | "bonus";
+  completedAtLocalTime: string | null;
+};
 
 const REMINDER_RUN_STATE_VALIDATOR = v.union(
   v.literal("scheduled"),
@@ -91,6 +153,138 @@ function getDaySchedule(habit: Doc<"habits">, dayKey: string) {
     reminderTime: habit.reminderTime,
     checkInDeadline: habit.checkInDeadline,
   };
+}
+
+function hashReminderSeed(seed: string) {
+  let hash = 0;
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
+
+function looksLikeIndonesianText(text: string) {
+  const lowered = text.toLowerCase();
+  const signals = [
+    "gue",
+    "lo",
+    "aku",
+    "kamu",
+    "nggak",
+    "ga ",
+    "gak",
+    "hari ini",
+    "besok",
+    "jadwal",
+    "skip",
+    "geser",
+    "capek",
+    "males",
+    "alesan",
+    "alasan",
+    "beban",
+    "cupu",
+    "halah",
+    "bangsat",
+    "bro",
+    "woy",
+  ];
+  return signals.some((signal) => lowered.includes(signal));
+}
+
+function detectReminderLanguageHint(parts: Array<string | null | undefined>) {
+  const sample = parts.filter(Boolean).join(" ").trim();
+  if (!sample) {
+    return "english" satisfies ReminderLanguageHint;
+  }
+
+  return looksLikeIndonesianText(sample)
+    ? ("indonesian" satisfies ReminderLanguageHint)
+    : ("english" satisfies ReminderLanguageHint);
+}
+
+function getTimelinePoint(reminderType: ReminderType): ReminderTimelinePoint {
+  if (reminderType === "pre_workout") {
+    return "post";
+  }
+  if (reminderType === "check_in") {
+    return "due";
+  }
+  return "deadline";
+}
+
+function getAgitationLevel(args: {
+  missedLast7d: number;
+  currentStreak: number;
+  reminderRunState: ReminderRunState | null;
+}) {
+  if (
+    args.missedLast7d >= 4 ||
+    args.reminderRunState === "user_hesitant" ||
+    args.reminderRunState === "ignored_once"
+  ) {
+    return "high" satisfies ReminderAgitationLevel;
+  }
+
+  if (args.missedLast7d >= 2 || args.currentStreak >= 3) {
+    return "medium" satisfies ReminderAgitationLevel;
+  }
+
+  return "low" satisfies ReminderAgitationLevel;
+}
+
+function getReminderVoiceDirectives(args: {
+  deliveryKind: ReminderDeliveryKind;
+  reminderType: ReminderType;
+  interactionHistory: ReminderInteractionHistory;
+  agitationLevel: ReminderAgitationLevel;
+  recentMissReasons: string[];
+  currentStreak: number;
+}) {
+  const directives = new Set<string>();
+
+  if (args.deliveryKind === "completion_interrupt") {
+    directives.add("side_eye_respect");
+    directives.add("keep_it_short");
+    directives.add("no_pending_action_commands");
+    directives.add("barely_saved_it");
+  } else if (args.reminderType === "pre_workout") {
+    directives.add("clock_callout");
+    directives.add("buddy_nag");
+    directives.add("anticipatory_pressure");
+  } else if (args.reminderType === "check_in") {
+    directives.add("short_impatient");
+    directives.add("demand_action");
+    directives.add("now_or_never");
+  } else {
+    directives.add("cold_verdict");
+    directives.add("final_cutoff");
+    directives.add("no_soft_closing");
+  }
+
+  if (args.interactionHistory === "ghosting") {
+    directives.add("call_out_silence");
+  }
+  if (args.interactionHistory === "hesitating") {
+    directives.add("call_out_resistance");
+  }
+  if (args.interactionHistory === "promised_but_stalling") {
+    directives.add("call_out_empty_talk");
+  }
+  if (args.interactionHistory === "silent_completion") {
+    directives.add("respect_with_side_eye");
+  }
+  if (args.agitationLevel === "high") {
+    directives.add("turn_up_heat");
+  }
+  if (args.currentStreak >= 3) {
+    directives.add("protect_streak");
+  }
+  if (args.recentMissReasons.length > 0) {
+    directives.add("weaponize_last_excuse");
+  }
+
+  return [...directives];
 }
 
 function toTimestamp(dateKey: string, time: string, timezone: string) {
@@ -197,30 +391,6 @@ function compareCheckInsDesc(left: Doc<"checkIns">, right: Doc<"checkIns">) {
   }
 
   return right.timestamp - left.timestamp;
-}
-
-function summarizeMissTrend(missedLast7d: number) {
-  if (missedLast7d >= 4) {
-    return "You've been leaking this habit all week.";
-  }
-
-  if (missedLast7d >= 2) {
-    return "This habit has been wobbling lately.";
-  }
-
-  return "";
-}
-
-function summarizeStreak(currentStreak: number) {
-  if (currentStreak >= 7) {
-    return `You're on a ${currentStreak}-day streak. Don't get cute now.`;
-  }
-
-  if (currentStreak >= 3) {
-    return `You're on a ${currentStreak}-day run. Keep it clean.`;
-  }
-
-  return "";
 }
 
 function isClosedReminderRunState(
@@ -343,6 +513,7 @@ async function advanceReminderRunState(args: {
   userResponded?: boolean;
   responseIntent?: string;
   responseSummary?: string;
+  completionAcknowledgedAt?: number;
 }) {
   const existing = await getReminderRun(args);
   const state = resolveReminderRunStateForRuntime({
@@ -371,6 +542,9 @@ async function advanceReminderRunState(args: {
     if (args.responseSummary !== undefined) {
       patch.responseSummary = args.responseSummary;
     }
+    if (args.completionAcknowledgedAt !== undefined) {
+      patch.completionAcknowledgedAt = args.completionAcknowledgedAt;
+    }
 
     await args.ctx.db.patch(existing._id, patch);
     return {
@@ -389,6 +563,7 @@ async function advanceReminderRunState(args: {
     userResponded: args.userResponded ?? false,
     responseIntent: args.responseIntent,
     responseSummary: args.responseSummary,
+    completionAcknowledgedAt: args.completionAcknowledgedAt,
     createdAt: args.now,
     updatedAt: args.now,
   });
@@ -437,7 +612,10 @@ function buildReminderContext(args: {
 
   return {
     habitName: args.habit.name,
+    habitRules: args.habit.rules,
+    motivation: args.habit.motivation,
     currentStreak: args.habit.currentStreak,
+    bestStreak: args.habit.bestStreak,
     missedLast7d,
     lastCheckInStatus: lastCheckIn?.status ?? null,
     recentMissReasons,
@@ -454,83 +632,225 @@ function buildReminderContext(args: {
   };
 }
 
-function buildReminderCopy(params: {
-  habit: Doc<"habits">;
-  type: ReminderType;
-  scheduledTime: string;
-  deadline: string;
-  context: ReturnType<typeof buildReminderContext>;
+function buildReminderStageHistory(args: {
+  reminder: Doc<"reminders">;
+  todayReminders: Doc<"reminders">[];
+  habitMessages: Doc<"messages">[];
 }) {
-  const streakSignal = summarizeStreak(params.context.currentStreak);
-  const missSignal = summarizeMissTrend(params.context.missedLast7d);
-  const recentReason = params.context.recentMissReasons[0] ?? "";
-  const memorySignal = params.context.memorySignal ?? "";
-  const runState = params.context.reminderRunState;
+  const reminderByType = new Map(
+    args.todayReminders.map((entry) => [entry.type, entry]),
+  );
+  const currentIndex = REMINDER_STAGE_ORDER.indexOf(args.reminder.type);
+  const history: ReminderStageHistoryItem[] = [];
 
-  if (params.type === "pre_workout") {
-    const bodyLead =
-      runState === "rescheduled"
-        ? `${params.habit.name} already got moved. Good. Now actually show up.`
-        : memorySignal ||
-          streakSignal ||
-          missSignal ||
-          `${params.habit.name} is coming up. You ready or already making excuses?`;
-    const contentTail = recentReason
-      ? `Last time you used: ${recentReason}. Not again.`
-      : "Be ready before the excuses start talking.";
+  for (let index = 0; index < currentIndex; index += 1) {
+    const reminderType = REMINDER_STAGE_ORDER[index];
+    const stageReminder = reminderByType.get(reminderType);
+    if (!stageReminder) {
+      continue;
+    }
 
-    return {
-      title: "Streak",
-      body: bodyLead,
-      content: `${params.habit.name} starts at ${params.scheduledTime}. ${contentTail}`,
-    };
+    const nextReminder =
+      reminderByType.get(REMINDER_STAGE_ORDER[index + 1]) ?? args.reminder;
+    const responses = args.habitMessages
+      .filter((message) => message.role === "user")
+      .filter(
+        (message) =>
+          message.timestamp >= stageReminder.scheduledFor &&
+          message.timestamp < nextReminder.scheduledFor,
+      )
+      .sort((left, right) => left.timestamp - right.timestamp);
+    const lastResponse = responses.at(-1) ?? null;
+
+    history.push({
+      reminderType,
+      timelinePoint: getTimelinePoint(reminderType),
+      scheduledFor: stageReminder.scheduledFor,
+      sent: stageReminder.sent,
+      responseCode: responses.length > 0 ? "R" : "D",
+      userMessageCount: responses.length,
+      userIntent: lastResponse?.intent ?? null,
+      userSummary: lastResponse?.content?.trim() ?? null,
+    });
   }
 
-  if (params.type === "check_in") {
-    const bodyLead =
-      runState === "user_acknowledged"
-        ? `You already responded on ${params.habit.name}. Good. Now finish the rep.`
-        : runState === "user_hesitant"
-          ? `You already flinched on ${params.habit.name}. Do the smallest clean version now.`
-          : memorySignal ||
-            (params.context.lastCheckInStatus === "missed"
-              ? `${params.habit.name} is up. Don't repeat the last miss.`
-              : `It's check-in time for ${params.habit.name}. Did you do it?`);
-    const contentTail =
-      runState === "user_acknowledged"
-        ? "You don't need another debate. Just log the result clean."
-        : runState === "user_hesitant"
-          ? "Start with 5-10 minutes or one clean set, then answer honestly."
-          : missSignal ||
-            streakSignal ||
-            memorySignal ||
-            "Answer clean: did you do it or are you dodging it?";
+  return history;
+}
 
-    return {
-      title: "Streak",
-      body: bodyLead,
-      content: `It's ${params.scheduledTime}. ${contentTail}`,
-    };
+function getReminderInteractionHistory(args: {
+  deliveryKind: ReminderDeliveryKind;
+  reminderType: ReminderType;
+  reminderRunState: ReminderRunState | null;
+  stageHistory: ReminderStageHistoryItem[];
+  completionStatus: "none" | "completed" | "bonus";
+}) {
+  const respondedCount = args.stageHistory.filter(
+    (entry) => entry.responseCode === "R",
+  ).length;
+
+  if (args.deliveryKind === "completion_interrupt") {
+    return respondedCount === 0
+      ? ("silent_completion" satisfies ReminderInteractionHistory)
+      : ("active_responder" satisfies ReminderInteractionHistory);
   }
 
-  const lateLead =
-    runState === "user_acknowledged"
-      ? `${params.habit.name} was acknowledged but still died at the ${params.deadline} deadline.`
-      : runState === "user_hesitant"
-        ? `${params.habit.name} stayed stuck in hesitation until the ${params.deadline} deadline.`
-        : memorySignal ||
-          missSignal ||
-          streakSignal ||
-          `${params.habit.name} is past the ${params.deadline} deadline. That's an automatic miss.`;
-  const lateTail = recentReason
-    ? `Pattern says the same excuse keeps showing up: ${recentReason}.`
-    : "You let the deadline win this round.";
+  if (args.reminderRunState === "user_hesitant") {
+    return "hesitating" satisfies ReminderInteractionHistory;
+  }
 
+  if (respondedCount === 0) {
+    return args.stageHistory.length === 0
+      ? ("fresh" satisfies ReminderInteractionHistory)
+      : ("ghosting" satisfies ReminderInteractionHistory);
+  }
+
+  if (
+    args.reminderType === "late_follow_up" &&
+    args.completionStatus === "none"
+  ) {
+    return "promised_but_stalling" satisfies ReminderInteractionHistory;
+  }
+
+  return "active_responder" satisfies ReminderInteractionHistory;
+}
+
+function buildReminderPlaceholder() {
   return {
     title: "Streak",
-    body: lateLead,
-    content: `It's past ${params.deadline}. ${params.habit.name} is an automatic miss unless you already logged it. ${lateTail}`,
+    body: "[pending_reminder_generation]",
+    content: "[pending_reminder_generation]",
   };
+}
+
+function formatReminderLocalTime(timestamp: number, timezone: string) {
+  return formatInTimeZone(new Date(timestamp), timezone, "HH:mm");
+}
+
+function buildReminderRewriteContext(args: {
+  deliveryKind: ReminderDeliveryKind;
+  habit: Doc<"habits">;
+  reminder: Doc<"reminders">;
+  schedule: ReturnType<typeof getDaySchedule>;
+  reminderContext: ReturnType<typeof buildReminderContext>;
+  reminderRunState: ReminderRunState | null;
+  todayReminders: Doc<"reminders">[];
+  habitMessages: Doc<"messages">[];
+  timezone: string;
+  completionCheckIn?: Doc<"checkIns"> | null;
+}) {
+  const scheduledAt = toTimestamp(
+    args.reminder.date,
+    args.schedule.scheduledTime,
+    args.timezone,
+  );
+  const deadlineAt = toTimestamp(
+    args.reminder.date,
+    args.schedule.checkInDeadline,
+    args.timezone,
+  );
+  const stageHistory = buildReminderStageHistory({
+    reminder: args.reminder,
+    todayReminders: args.todayReminders,
+    habitMessages: args.habitMessages,
+  });
+  const lastUserResponse = stageHistory
+    .slice()
+    .reverse()
+    .find((entry) => entry.userSummary || entry.userIntent) ?? null;
+  const completionStatus =
+    args.completionCheckIn?.status === "bonus"
+      ? "bonus"
+      : args.completionCheckIn?.status === "completed"
+        ? "completed"
+        : "none";
+  const interactionHistory = getReminderInteractionHistory({
+    deliveryKind: args.deliveryKind,
+    reminderType: args.reminder.type,
+    reminderRunState: args.reminderRunState,
+    stageHistory,
+    completionStatus,
+  });
+  const responsePattern =
+    stageHistory.length > 0
+      ? stageHistory.map((entry) => entry.responseCode).join("-")
+      : "fresh";
+  const agitationLevel = getAgitationLevel({
+    missedLast7d: args.reminderContext.missedLast7d,
+    currentStreak: args.reminderContext.currentStreak,
+    reminderRunState: args.reminderRunState,
+  });
+  const styleSeed = hashReminderSeed(
+    [
+      args.deliveryKind,
+      args.reminder.type,
+      args.reminder.date,
+      args.habit.name,
+      responsePattern,
+      interactionHistory,
+      completionStatus,
+      agitationLevel,
+      args.reminderContext.recentMissReasons[0] ?? "",
+    ].join("|"),
+  );
+  const languageHint = detectReminderLanguageHint([
+    args.habit.name,
+    args.reminderContext.memorySignal,
+    args.reminderContext.motivation,
+    ...args.reminderContext.recentMissReasons,
+    ...args.habitMessages.slice(-2).map((message) => message.content),
+  ]);
+
+  return {
+    deliveryKind: args.deliveryKind,
+    habitName: args.habit.name,
+    habitRules: args.reminderContext.habitRules,
+    motivation: args.reminderContext.motivation,
+    reminderType: args.reminder.type,
+    currentTimelinePoint: getTimelinePoint(args.reminder.type),
+    reminderDate: args.reminder.date,
+    scheduledTime: args.schedule.scheduledTime,
+    deadline: args.schedule.checkInDeadline,
+    scheduledDeltaMinutes: Math.round(
+      (scheduledAt - args.reminder.scheduledFor) / 60000,
+    ),
+    deadlineDeltaMinutes: Math.round(
+      (deadlineAt - args.reminder.scheduledFor) / 60000,
+    ),
+    currentStreak: args.reminderContext.currentStreak,
+    bestStreak: args.reminderContext.bestStreak,
+    missedLast7d: args.reminderContext.missedLast7d,
+    lastCheckInStatus: args.reminderContext.lastCheckInStatus,
+    recentMissReasons: args.reminderContext.recentMissReasons,
+    memorySignal: args.reminderContext.memorySignal,
+    reminderRunState: args.reminderRunState,
+    todayPendingTypes: args.reminderContext.todayReminderStatus.pendingTypes,
+    todaySentTypes: args.reminderContext.todayReminderStatus.sentTypes,
+    languageHint,
+    interactionHistory,
+    responsePattern,
+    stageHistory,
+    lastUserResponseIntent: lastUserResponse?.userIntent ?? null,
+    lastUserResponseSummary: lastUserResponse?.userSummary ?? null,
+    isAggravated:
+      agitationLevel === "high" || args.reminderContext.missedLast7d >= 3,
+    agitationLevel,
+    voiceDirectives: getReminderVoiceDirectives({
+      deliveryKind: args.deliveryKind,
+      reminderType: args.reminder.type,
+      interactionHistory,
+      agitationLevel,
+      recentMissReasons: args.reminderContext.recentMissReasons,
+      currentStreak: args.reminderContext.currentStreak,
+    }),
+    styleSeed,
+    completionStatus,
+    completedAtLocalTime: args.completionCheckIn
+      ? formatReminderLocalTime(
+          args.completionCheckIn.timestamp,
+          args.timezone,
+        )
+      : null,
+  } satisfies ReminderRewriteContext;
 }
 
 export const listByUser = query({
@@ -766,18 +1086,114 @@ export const processReminder = internalMutation({
       null;
 
     if (existingCheckIn) {
+      if (
+        existingCheckIn.status === "missed" ||
+        reminderRun?.completionAcknowledgedAt
+      ) {
+        await advanceReminderRunState({
+          ctx,
+          userId: reminder.userId,
+          habitId: reminder.habitId,
+          date: reminder.date,
+          nextState:
+            existingCheckIn.status === "missed" ? "missed" : "completed",
+          now: reminder.scheduledFor,
+        });
+        await ctx.db.patch(reminder._id, { sent: true });
+        return {
+          shouldSendPush: false,
+          skipped: true,
+        };
+      }
+
+      const timezone = getTimezone(user);
+      const allCheckIns = await ctx.db
+        .query("checkIns")
+        .withIndex("by_user_date", (q) => q.eq("userId", reminder.userId))
+        .collect();
+      const recentEpisodes = await ctx.db
+        .query("agentEpisodes")
+        .withIndex("by_user_date", (q) => q.eq("userId", reminder.userId))
+        .order("desc")
+        .take(12);
+      const memoryRows = await ctx.db
+        .query("agentMemory")
+        .withIndex("by_user_scope", (q) => q.eq("userId", reminder.userId))
+        .collect();
+      const todayReminders = await ctx.db
+        .query("reminders")
+        .withIndex("by_user", (q) => q.eq("userId", reminder.userId))
+        .collect();
+      const habitMessages = (await ctx.db
+        .query("messages")
+        .withIndex("by_habit", (q) => q.eq("habitId", habit._id))
+        .collect()) as Doc<"messages">[];
+      const dayKey = getDayKey(new Date(reminder.scheduledFor), timezone);
+      const schedule = getDaySchedule(habit, dayKey);
+      const memorySnapshot = selectMemorySnapshot({
+        memories: memoryRows,
+        episodes: recentEpisodes,
+        habitId: habit._id,
+      });
+      const todayRemindersForDate = todayReminders.filter(
+        (entry) => entry.date === reminder.date,
+      );
+      const reminderContext = buildReminderContext({
+        habit,
+        reminder,
+        reminderRunState: reminderRun?.state ?? null,
+        allCheckIns,
+        todayReminders: todayRemindersForDate,
+        timezone,
+        memorySignal: pickMemorySignal(memorySnapshot),
+      });
+      const rewriteContext = buildReminderRewriteContext({
+        deliveryKind: "completion_interrupt",
+        habit,
+        reminder,
+        schedule,
+        reminderContext,
+        reminderRunState: reminderRun?.state ?? null,
+        todayReminders: todayRemindersForDate,
+        habitMessages,
+        timezone,
+        completionCheckIn: existingCheckIn,
+      });
+      const placeholder = buildReminderPlaceholder();
+      const messageId = await ctx.db.insert("messages", {
+        userId: user._id,
+        habitId: habit._id,
+        role: "ai",
+        content: placeholder.content,
+        intent: REMINDER_MESSAGE_INTENT[reminder.type],
+        timestamp: reminder.scheduledFor,
+      });
+
       await advanceReminderRunState({
         ctx,
         userId: reminder.userId,
         habitId: reminder.habitId,
         date: reminder.date,
-        nextState: existingCheckIn.status === "missed" ? "missed" : "completed",
+        nextState: "completed",
         now: reminder.scheduledFor,
+        lastReminderType: reminder.type,
+        lastMessageId: messageId,
+        completionAcknowledgedAt: reminder.scheduledFor,
       });
       await ctx.db.patch(reminder._id, { sent: true });
       return {
-        shouldSendPush: false,
-        skipped: true,
+        shouldSendPush: true,
+        userId: user._id,
+        reminderType: reminder.type,
+        messageId,
+        payload: {
+          title: placeholder.title,
+          body: placeholder.body,
+          url: "/dashboard?tab=chat",
+          habitId: habit._id,
+          reminderType: reminder.type,
+          rewriteContext,
+        },
       };
     }
 
@@ -823,6 +1239,10 @@ export const processReminder = internalMutation({
       .query("reminders")
       .withIndex("by_user", (q) => q.eq("userId", reminder.userId))
       .collect();
+    const habitMessages = (await ctx.db
+      .query("messages")
+      .withIndex("by_habit", (q) => q.eq("habitId", habit._id))
+      .collect()) as Doc<"messages">[];
     const dayKey = getDayKey(
       new Date(reminder.scheduledFor),
       timezone,
@@ -838,25 +1258,31 @@ export const processReminder = internalMutation({
       reminder,
       reminderRunState: reminderRun?.state ?? null,
       allCheckIns,
-      todayReminders: todayReminders.filter(
-        (entry) => entry.date === reminder.date,
-      ),
+      todayReminders: todayReminders.filter((entry) => entry.date === reminder.date),
       timezone,
       memorySignal: pickMemorySignal(memorySnapshot),
     });
-    const copy = buildReminderCopy({
+    const todayRemindersForDate = todayReminders.filter(
+      (entry) => entry.date === reminder.date,
+    );
+    const rewriteContext = buildReminderRewriteContext({
+      deliveryKind: "stage_reminder",
       habit,
-      type: reminder.type,
-      scheduledTime: schedule.scheduledTime,
-      deadline: schedule.checkInDeadline,
-      context: reminderContext,
+      reminder,
+      schedule,
+      reminderContext,
+      reminderRunState: reminderRun?.state ?? null,
+      todayReminders: todayRemindersForDate,
+      habitMessages,
+      timezone,
+      completionCheckIn: null,
     });
+    const placeholder = buildReminderPlaceholder();
 
-    let aiContent = copy.content;
+    let aiContent = placeholder.content;
     let checkInCreatedId: Id<"checkIns"> | undefined;
 
     if (reminder.type === "late_follow_up") {
-      aiContent = `${copy.content} Reset and show up on the next scheduled day.`;
       checkInCreatedId = await ctx.db.insert("checkIns", {
         habitId: habit._id,
         userId: user._id,
@@ -921,11 +1347,12 @@ export const processReminder = internalMutation({
       messageId,
       checkInCreatedId,
       payload: {
-        title: copy.title,
-        body: copy.body,
+        title: placeholder.title,
+        body: placeholder.body,
         url: "/dashboard?tab=chat",
         habitId: habit._id,
         reminderType: reminder.type,
+        rewriteContext,
       },
     };
   },
@@ -941,6 +1368,7 @@ export const advanceReminderRun = internalMutation({
     userResponded: v.optional(v.boolean()),
     responseIntent: v.optional(v.string()),
     responseSummary: v.optional(v.string()),
+    completionAcknowledgedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await advanceReminderRunState({
@@ -953,6 +1381,7 @@ export const advanceReminderRun = internalMutation({
       userResponded: args.userResponded,
       responseIntent: args.responseIntent,
       responseSummary: args.responseSummary,
+      completionAcknowledgedAt: args.completionAcknowledgedAt,
     });
   },
 });

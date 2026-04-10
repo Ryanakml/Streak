@@ -42,9 +42,7 @@ type ChatClassification =
   | "bonus"
   | "clarify_workout";
 
-type SendMessageClassification =
-  | ChatClassification
-  | OperationalIntent;
+type SendMessageClassification = ChatClassification | OperationalIntent;
 
 type WorkoutPayload = {
   exercises: Array<{
@@ -206,6 +204,7 @@ type PlannerItem = {
   itemId: string;
   title: string;
   scheduledTime: string | null;
+  deadlineTime: string | null;
   status:
     | "pending"
     | "completed"
@@ -218,6 +217,23 @@ type PlannerItem = {
   riskNote: string;
   conflictWith: string[];
   itemDate: string;
+  timingState:
+    | "completed"
+    | "missed"
+    | "bonus"
+    | "skipped"
+    | "cancelled"
+    | "done"
+    | "unscheduled"
+    | "upcoming"
+    | "due_soon"
+    | "overdue"
+    | "deadline_passed";
+  timingNote: string | null;
+  minutesUntilScheduled: number | null;
+  minutesUntilDeadline: number | null;
+  minutesLateFromScheduled: number | null;
+  minutesLateFromDeadline: number | null;
 };
 
 type PlannerPlan = {
@@ -306,6 +322,12 @@ type ResolvedTurn =
 type ChatContext = {
   user: Doc<"users">;
   date: string;
+  timezone: string;
+  nowTs: number;
+  nowIso: string;
+  nowLocalTime: string;
+  nowLocalDateTime: string;
+  minutesIntoDay: number;
   todayDayKey: string;
   activeHabits: Doc<"habits">[];
   todayHabits: Doc<"habits">[];
@@ -339,8 +361,166 @@ function coerceString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isDateKey(value: string | null) {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function isTimeKey(value: string | null) {
+  return Boolean(value && /^\d{2}:\d{2}$/.test(value));
+}
+
+function timeToMinutes(time: string) {
+  const [hours, minutes] = time.split(":").map((part) => Number(part));
+  return hours * 60 + minutes;
+}
+
+function formatDuration(totalMinutes: number) {
+  const safeMinutes = Math.max(0, totalMinutes);
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
+
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+
+  if (minutes === 0) {
+    return `${hours}j`;
+  }
+
+  return `${hours}j ${minutes}m`;
+}
+
 function isHabitScheduledOnDay(habit: Doc<"habits"> | null, dayKey: string) {
   return Boolean(habit && habit.targetDays.includes(dayKey));
+}
+
+function getHabitScheduleForDay(habit: Doc<"habits">, dayKey: string) {
+  if (dayKey === "fri" && habit.schedules?.fri) {
+    return habit.schedules.fri;
+  }
+
+  return {
+    scheduledTime: habit.scheduledTime,
+    reminderTime: habit.reminderTime,
+    checkInDeadline: habit.checkInDeadline,
+  };
+}
+
+function summarizeCurrentTimeContext(context: ChatContext) {
+  return {
+    timezone: context.timezone,
+    todayDate: context.date,
+    nowTs: context.nowTs,
+    nowIso: context.nowIso,
+    nowLocalTime: context.nowLocalTime,
+    nowLocalDateTime: context.nowLocalDateTime,
+    minutesIntoDay: context.minutesIntoDay,
+  };
+}
+
+function buildHabitTimeContext(
+  context: ChatContext,
+  habit: Doc<"habits"> | null,
+) {
+  if (!habit) {
+    return null;
+  }
+
+  const schedule = getHabitScheduleForDay(habit, context.todayDayKey);
+  const existingCheckIn =
+    context.todayCheckIns.find((entry) => entry.habitId === habit._id) ?? null;
+  const scheduledToday = habit.targetDays.includes(context.todayDayKey);
+
+  if (existingCheckIn) {
+    return {
+      scheduledToday,
+      scheduledTime: schedule.scheduledTime,
+      checkInDeadline: schedule.checkInDeadline,
+      state: existingCheckIn.status,
+      timingNote:
+        existingCheckIn.status === "completed"
+          ? "sudah selesai hari ini"
+          : existingCheckIn.status === "bonus"
+            ? "bonus sudah masuk hari ini"
+            : "sudah miss hari ini",
+      minutesUntilScheduled: null,
+      minutesUntilDeadline: null,
+      minutesLateFromScheduled: null,
+      minutesLateFromDeadline: null,
+    };
+  }
+
+  if (!scheduledToday) {
+    return {
+      scheduledToday: false,
+      scheduledTime: schedule.scheduledTime,
+      checkInDeadline: schedule.checkInDeadline,
+      state: "not_scheduled_today" as const,
+      timingNote: "ga terjadwal buat hari ini",
+      minutesUntilScheduled: null,
+      minutesUntilDeadline: null,
+      minutesLateFromScheduled: null,
+      minutesLateFromDeadline: null,
+    };
+  }
+
+  const scheduledMinutes = timeToMinutes(schedule.scheduledTime);
+  const deadlineMinutes = timeToMinutes(schedule.checkInDeadline);
+  const minutesUntilScheduled = scheduledMinutes - context.minutesIntoDay;
+  const minutesUntilDeadline = deadlineMinutes - context.minutesIntoDay;
+  const minutesLateFromScheduled =
+    minutesUntilScheduled < 0 ? Math.abs(minutesUntilScheduled) : null;
+  const minutesLateFromDeadline =
+    minutesUntilDeadline < 0 ? Math.abs(minutesUntilDeadline) : null;
+
+  if (minutesUntilScheduled > 0) {
+    return {
+      scheduledToday: true,
+      scheduledTime: schedule.scheduledTime,
+      checkInDeadline: schedule.checkInDeadline,
+      state:
+        minutesUntilScheduled <= 60
+          ? ("due_soon" as const)
+          : ("upcoming" as const),
+      timingNote: `mulai ${formatDuration(minutesUntilScheduled)} lagi`,
+      minutesUntilScheduled,
+      minutesUntilDeadline,
+      minutesLateFromScheduled,
+      minutesLateFromDeadline,
+    };
+  }
+
+  if (minutesUntilDeadline < 0) {
+    return {
+      scheduledToday: true,
+      scheduledTime: schedule.scheduledTime,
+      checkInDeadline: schedule.checkInDeadline,
+      state: "deadline_passed" as const,
+      timingNote: `deadline ${schedule.checkInDeadline} sudah lewat ${formatDuration(
+        Math.abs(minutesUntilDeadline),
+      )}`,
+      minutesUntilScheduled,
+      minutesUntilDeadline,
+      minutesLateFromScheduled,
+      minutesLateFromDeadline,
+    };
+  }
+
+  return {
+    scheduledToday: true,
+    scheduledTime: schedule.scheduledTime,
+    checkInDeadline: schedule.checkInDeadline,
+    state: "overdue" as const,
+    timingNote: `sudah lewat ${formatDuration(
+      Math.abs(minutesUntilScheduled),
+    )} dari jam ${schedule.scheduledTime}, deadline ${formatDuration(
+      minutesUntilDeadline,
+    )} lagi`,
+    minutesUntilScheduled,
+    minutesUntilDeadline,
+    minutesLateFromScheduled,
+    minutesLateFromDeadline,
+  };
 }
 
 function hasWorkoutMetrics(exercise: WorkoutPayload["exercises"][number]) {
@@ -494,7 +674,8 @@ function getSupportingQuestionSignal(args: {
 
   const statSignal = summarizeStatSignal(args.decision.patternSummary);
   const episodeSignal = getStrongestEpisodeSignal(args.context);
-  const memorySignal = args.context.habitMemorySummary ?? args.context.globalMemorySummary;
+  const memorySignal =
+    args.context.habitMemorySummary ?? args.context.globalMemorySummary;
 
   if (args.decision.questionFocus === "pattern") {
     return episodeSignal && episodeSignal !== memorySignal
@@ -502,7 +683,9 @@ function getSupportingQuestionSignal(args: {
       : statSignal;
   }
 
-  return memorySignal && memorySignal !== statSignal ? memorySignal : episodeSignal;
+  return memorySignal && memorySignal !== statSignal
+    ? memorySignal
+    : episodeSignal;
 }
 
 function getHabitReminderStatus(
@@ -752,7 +935,11 @@ function buildOperationalClarificationQuestion(
   }
 
   if (actionType === "reschedule_habit_time") {
-    if (missingFields.includes("habit") && missingFields.includes("date") && missingFields.includes("time")) {
+    if (
+      missingFields.includes("habit") &&
+      missingFields.includes("date") &&
+      missingFields.includes("time")
+    ) {
       return "Habit apa yang mau digeser, untuk tanggal kapan, dan jam berapa?";
     }
     if (missingFields.includes("habit") && missingFields.includes("date")) {
@@ -818,7 +1005,6 @@ function getOperationalTargetType(actionType: string | null | undefined) {
 
   return "habit";
 }
-
 
 function normalizeWorkout(value: unknown): WorkoutPayload | null {
   if (!value || typeof value !== "object") {
@@ -940,7 +1126,9 @@ function extractDeterministicWorkout(content: string): WorkoutPayload | null {
     markFirstIndex(compactSetRepMatch.index ?? raw.length);
   }
 
-  const durationMatch = raw.match(/(\d+(?:[.,]\d+)?)\s*(min|mins|minute|minutes|menit)\b/i);
+  const durationMatch = raw.match(
+    /(\d+(?:[.,]\d+)?)\s*(min|mins|minute|minutes|menit)\b/i,
+  );
   if (durationMatch) {
     const parsed = normalizeMetricNumber(durationMatch[1]);
     if (parsed != null) {
@@ -1053,6 +1241,421 @@ function applyDeterministicWorkoutResolution(args: {
   };
 }
 
+function inferMissHesitationFromContent(content: string) {
+  const lowered = content.toLowerCase();
+  const finalMissSignals = [
+    "gagal",
+    "ga jadi",
+    "gak jadi",
+    "nggak jadi",
+    "tidak jadi",
+    "kelewat",
+    "miss hari ini",
+    "i missed",
+    "missed",
+    "didn't",
+    "did not",
+    "couldn't",
+    "could not",
+    "ga sempat",
+    "gak sempat",
+    "nggak sempat",
+    "tidak sempat",
+    "belum ngerjain",
+    "belum dikerjain",
+  ];
+  const hesitationSignals = [
+    "males",
+    "malas",
+    "capek",
+    "too tired",
+    "lazy",
+    "belum mood",
+    "nanti aja",
+    "nanti",
+  ];
+  const hasFinalMissSignal = finalMissSignals.some((signal) =>
+    lowered.includes(signal),
+  );
+  const hasHesitationSignal = hesitationSignals.some((signal) =>
+    lowered.includes(signal),
+  );
+
+  if (hasFinalMissSignal) {
+    return "missed" as const;
+  }
+
+  if (hasHesitationSignal) {
+    return "excuse" as const;
+  }
+
+  return null;
+}
+
+function normalizeQuestionSafetyCheck(value: unknown) {
+  const candidate =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+
+  return {
+    isVerificationQuestion: Boolean(candidate.isVerificationQuestion),
+    suggestedQuestionFocus: (() => {
+      const focus = coerceString(candidate.suggestedQuestionFocus);
+      return focus === "pattern" ||
+        focus === "status" ||
+        focus === "schedule" ||
+        focus === "general"
+        ? (focus as QuestionFocus)
+        : null;
+    })(),
+  };
+}
+
+function normalizeMissHesitationSafetyCheck(value: unknown) {
+  const candidate =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const correctedClassification = coerceString(
+    candidate.correctedClassification,
+  );
+
+  return {
+    correctedClassification:
+      correctedClassification === "missed" ||
+      correctedClassification === "excuse"
+        ? (correctedClassification as "missed" | "excuse")
+        : null,
+  };
+}
+
+function normalizeOperationalSafetyCheck(value: unknown) {
+  const candidate =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const correctedIntent = coerceString(candidate.correctedIntent);
+
+  return {
+    correctedIntent:
+      correctedIntent === "reschedule_habit_time" ||
+      correctedIntent === "skip_habit_for_date" ||
+      correctedIntent === "create_task" ||
+      correctedIntent === "ask_today_plan" ||
+      correctedIntent === "ask_tomorrow_plan" ||
+      correctedIntent === "risk_scan" ||
+      correctedIntent === "simple_reschedule_suggestion" ||
+      correctedIntent === "none"
+        ? correctedIntent
+        : null,
+    continuePendingAction: Boolean(candidate.continuePendingAction),
+    supersedePendingAction: Boolean(candidate.supersedePendingAction),
+    requiresClarification: Boolean(candidate.requiresClarification),
+    clarificationQuestion:
+      coerceString(candidate.clarificationQuestion) || null,
+  };
+}
+
+async function applyQuestionSafetyResolution(args: {
+  content: string;
+  extraction: ChatExtractionResult;
+  source: "chat_input" | "quick_complete" | "quick_miss";
+  pendingWorkoutHabit: Doc<"habits"> | null;
+  context: ChatContext;
+}) {
+  if (args.source !== "chat_input") {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  if (args.pendingWorkoutHabit) {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  if (
+    args.extraction.classification !== "completed" &&
+    args.extraction.classification !== "missed" &&
+    args.extraction.classification !== "bonus"
+  ) {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  if (!args.content.includes("?")) {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  const result = await callModelJsonWithTrace([
+    {
+      role: "system",
+      content:
+        "You are a safety checker for habit tracking. " +
+        "Return valid JSON only with keys isVerificationQuestion and suggestedQuestionFocus. " +
+        "isVerificationQuestion should be true only when the user's message is asking to verify, confirm, or check status/progress/streak, rather than reporting a result that should mutate data. " +
+        "suggestedQuestionFocus must be one of pattern, status, schedule, general, or null. " +
+        "A verification question can be blunt or informal and may still mention completion-like words. " +
+        "Examples: 'Gue udah 10 hari streak gym kan?' -> true, pattern. " +
+        "Example: 'Is my reading streak safe today?' -> true, status. " +
+        "Example: 'Did I already finish gym today?' -> true, status. " +
+        "Example: 'I already finished gym today squat 3x8 60kg' -> false, null. " +
+        "Example: 'gue gagal gym hari ini karena ketiduran' -> false, null. " +
+        "Do not add prose outside JSON.",
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        todayDate: args.context.date,
+        timezone: args.context.timezone,
+        currentTimeContext: summarizeCurrentTimeContext(args.context),
+        userMessage: args.content,
+      }),
+    },
+  ]);
+
+  const check = normalizeQuestionSafetyCheck(parseJsonObject(result.content));
+  if (!check.isVerificationQuestion) {
+    return { extraction: args.extraction, trace: result.trace };
+  }
+
+  return {
+    extraction: {
+      ...args.extraction,
+      classification: "question" as const,
+      shouldLogCheckIn: false,
+      checkInStatus: null,
+      questionFocus:
+        check.suggestedQuestionFocus ?? args.extraction.questionFocus,
+      needsWorkoutClarification: false,
+    },
+    trace: result.trace,
+  };
+}
+
+async function applyMissHesitationSafetyResolution(args: {
+  content: string;
+  extraction: ChatExtractionResult;
+  source: "chat_input" | "quick_complete" | "quick_miss";
+  pendingWorkoutHabit: Doc<"habits"> | null;
+  context: ChatContext;
+}) {
+  if (args.source !== "chat_input") {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  if (args.pendingWorkoutHabit) {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  if (args.extraction.classification !== "excuse") {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  const lexicalResolution = inferMissHesitationFromContent(args.content);
+  if (lexicalResolution === "excuse") {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+  if (lexicalResolution === "missed") {
+    return {
+      extraction: {
+        ...args.extraction,
+        classification: "missed" as const,
+        shouldLogCheckIn: true,
+        checkInStatus: "missed" as const,
+        needsWorkoutClarification: false,
+      },
+      trace: null as ModelRunTrace | null,
+    };
+  }
+
+  const result = await callModelJsonWithTrace([
+    {
+      role: "system",
+      content:
+        "You are a safety checker that distinguishes final miss reports from hesitation. " +
+        "Return valid JSON only with key correctedClassification. " +
+        "correctedClassification must be one of missed, excuse, or null. " +
+        "Return missed only when the user is clearly reporting that the habit already failed, was missed, was not done, or could not be completed for today. " +
+        "Return excuse when the user is only resisting, hesitating, complaining, or sounding reluctant without finalizing failure. " +
+        "Examples: 'gue gagal gym hari ini karena capek pulang kerja' -> missed. " +
+        "Example: 'gue ga jadi gym hari ini' -> missed. " +
+        "Example: 'i missed my workout today' -> missed. " +
+        "Example: 'gue males gym hari ini' -> excuse. " +
+        "Example: 'too tired for gym right now' -> excuse. " +
+        "Do not add prose outside JSON.",
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        todayDate: args.context.date,
+        timezone: args.context.timezone,
+        currentTimeContext: summarizeCurrentTimeContext(args.context),
+        userMessage: args.content,
+      }),
+    },
+  ]);
+
+  const check = normalizeMissHesitationSafetyCheck(
+    parseJsonObject(result.content),
+  );
+  if (check.correctedClassification !== "missed") {
+    return { extraction: args.extraction, trace: result.trace };
+  }
+
+  return {
+    extraction: {
+      ...args.extraction,
+      classification: "missed" as const,
+      shouldLogCheckIn: true,
+      checkInStatus: "missed" as const,
+      needsWorkoutClarification: false,
+    },
+    trace: result.trace,
+  };
+}
+
+function applyMissKeywordGuard(args: {
+  content: string;
+  extraction: ChatExtractionResult;
+  source: "chat_input" | "quick_complete" | "quick_miss";
+}) {
+  if (
+    args.source !== "chat_input" ||
+    args.extraction.classification !== "missed"
+  ) {
+    return args.extraction;
+  }
+
+  const lexicalResolution = inferMissHesitationFromContent(args.content);
+  if (lexicalResolution !== "excuse") {
+    return args.extraction;
+  }
+
+  return {
+    ...args.extraction,
+    classification: "excuse" as const,
+    shouldLogCheckIn: false,
+    checkInStatus: null,
+    needsWorkoutClarification: false,
+  };
+}
+
+async function applyOperationalSafetyResolution(args: {
+  content: string;
+  extraction: OperationalExtractionResult | null;
+  chatExtraction: ChatExtractionResult;
+  source: "chat_input" | "quick_complete" | "quick_miss";
+  context: ChatContext;
+  pendingAction: Doc<"agentPendingActions"> | null;
+}) {
+  if (args.source !== "chat_input" || !args.extraction) {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  const riskyIntent = args.extraction.intent;
+  if (
+    riskyIntent !== "skip_habit_for_date" &&
+    riskyIntent !== "reschedule_habit_time" &&
+    riskyIntent !== "create_task"
+  ) {
+    return { extraction: args.extraction, trace: null as ModelRunTrace | null };
+  }
+
+  const result = await callModelJsonWithTrace([
+    {
+      role: "system",
+      content:
+        "You are a mutation safety checker for habit and planner operations. " +
+        "Return valid JSON only with keys correctedIntent, continuePendingAction, supersedePendingAction, requiresClarification, clarificationQuestion. " +
+        "correctedIntent must be one of reschedule_habit_time, skip_habit_for_date, create_task, ask_today_plan, ask_tomorrow_plan, risk_scan, simple_reschedule_suggestion, or none. " +
+        "continuePendingAction and supersedePendingAction must be booleans. " +
+        "requiresClarification must be true only when the user clearly wants an operation but the target or scope is still ambiguous. " +
+        "Use none when the message is only hesitation, excuse, failure report, or normal conversation rather than an operational mutation request. " +
+        "If chatExtraction says excuse or missed, do not convert it into skip_habit_for_date unless the user is clearly issuing an explicit planner command rather than reporting reluctance or failure. " +
+        "If there is a pendingAction and the user is simply answering the missing fields for that pending action, keep correctedIntent aligned with the pending action and set continuePendingAction=true. " +
+        "If the user is clearly starting a different request than the pendingAction, set supersedePendingAction=true. " +
+        "simple_reschedule_suggestion is only for advisory requests about what should be moved. " +
+        "If the user specifies the item that should be moved, or gives a concrete target date/time for that move, use reschedule_habit_time instead. " +
+        "Examples: 'gue males gym hari ini' -> none. " +
+        "Example: 'gue gagal gym hari ini karena capek' -> none. " +
+        "Example: 'skip gym besok' -> skip_habit_for_date, false. " +
+        "Example: 'skip semua besok' -> skip_habit_for_date, true, ask which habit should be skipped. " +
+        "Example: 'geser gym' -> reschedule_habit_time, true. " +
+        "Example: 'geser gym besok jam 9 malam' -> reschedule_habit_time, false. " +
+        "Example: 'yang paling enak digeser apa besok?' -> simple_reschedule_suggestion, false. " +
+        "Example: pendingAction=create_task follow up client, user='besok jam 10 pagi' -> create_task, continuePendingAction=true, false. " +
+        "Example: 'tambah task follow up client' -> create_task, true if timing is missing. " +
+        "Do not add prose outside JSON.",
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        todayDate: args.context.date,
+        timezone: args.context.timezone,
+        currentTimeContext: summarizeCurrentTimeContext(args.context),
+        activeHabits: args.context.activeHabits.map(summarizeHabit),
+        chatExtraction: {
+          classification: args.chatExtraction.classification,
+          habitName: args.chatExtraction.habitName,
+          checkInStatus: args.chatExtraction.checkInStatus,
+          questionFocus: args.chatExtraction.questionFocus,
+          reason: args.chatExtraction.reason,
+          shouldLogCheckIn: args.chatExtraction.shouldLogCheckIn,
+        },
+        pendingAction: args.pendingAction
+          ? {
+              intent: args.pendingAction.intent,
+              actionType: args.pendingAction.actionType,
+              payload: args.pendingAction.payload ?? {},
+              missingFields: args.pendingAction.missingFields,
+              clarificationQuestion: args.pendingAction.clarificationQuestion,
+            }
+          : null,
+        extractedIntent: args.extraction.intent,
+        extractedHabitName: args.extraction.habitName,
+        extractedTargetDate: args.extraction.targetDate,
+        extractedTargetTime: args.extraction.targetTime,
+        extractedTaskTitle: args.extraction.taskTitle,
+        userMessage: args.content,
+      }),
+    },
+  ]);
+
+  const check = normalizeOperationalSafetyCheck(
+    parseJsonObject(result.content),
+  );
+  if (!check.correctedIntent || check.correctedIntent === riskyIntent) {
+    return {
+      extraction: {
+        ...args.extraction,
+        continuePendingAction:
+          check.continuePendingAction || args.extraction.continuePendingAction,
+        supersedePendingAction:
+          check.supersedePendingAction ||
+          args.extraction.supersedePendingAction,
+        clarificationQuestion:
+          check.clarificationQuestion ?? args.extraction.clarificationQuestion,
+      },
+      trace: result.trace,
+    };
+  }
+
+  return {
+    extraction: {
+      ...args.extraction,
+      intent:
+        check.correctedIntent === "none"
+          ? null
+          : (check.correctedIntent as OperationalIntent),
+      continuePendingAction:
+        check.continuePendingAction || args.extraction.continuePendingAction,
+      supersedePendingAction:
+        check.supersedePendingAction || args.extraction.supersedePendingAction,
+      clarificationQuestion:
+        check.clarificationQuestion ?? args.extraction.clarificationQuestion,
+    },
+    trace: result.trace,
+  };
+}
+
 function normalizeExtraction(value: unknown): ChatExtractionResult {
   const candidate =
     value && typeof value === "object"
@@ -1111,6 +1714,161 @@ function parseJsonObject(content: string) {
     }
     throw new Error("Unable to parse model JSON response");
   }
+}
+
+function enforceBrutalDiction(content: string) {
+  const cleaned = content
+    .replace(/\bmaaf\b/gi, "")
+    .replace(/\bsilakan\b/gi, "langsung")
+    .replace(/\btolong\b/gi, "langsung")
+    .replace(/\bmohon\b/gi, "")
+    .replace(/\bplease\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .trim();
+
+  return cleaned || "Langsung ke inti. Eksekusi sekarang.";
+}
+
+const DIRECT_CUE_FRAGMENTS = [
+  "jangan",
+  "harus",
+  "langsung",
+  "alasan",
+  "tidur sana",
+  "mau",
+];
+
+function hasRequiredDirectCue(content: string) {
+  const lowered = content.toLowerCase();
+  return DIRECT_CUE_FRAGMENTS.some((fragment) =>
+    lowered.includes(fragment.toLowerCase()),
+  );
+}
+
+function looksEnglishDominant(text: string) {
+  const lowered = text.toLowerCase();
+  const indonesianSignals = [
+    "gue",
+    "lo",
+    "aku",
+    "kamu",
+    "hari ini",
+    "besok",
+    "jangan",
+    "langsung",
+    "alasan",
+    "jadwal",
+    "sudah",
+    "udah",
+    "gagal",
+    "kelewat",
+    "tercatat",
+  ];
+
+  if (indonesianSignals.some((signal) => lowered.includes(signal))) {
+    return false;
+  }
+
+  const englishSignals = [
+    "you",
+    "your",
+    "today",
+    "tomorrow",
+    "missed",
+    "get it done",
+    "already",
+    "deadline",
+    "focus",
+    "session",
+    "move now",
+    "don't",
+  ];
+  const englishHits = englishSignals.filter((signal) =>
+    lowered.includes(signal),
+  ).length;
+
+  return englishHits >= 2;
+}
+
+function enforceReplyLanguage(args: {
+  content: string;
+  userMessage: string;
+  mode: ResponseMode;
+}) {
+  if (
+    !looksLikeIndonesian(args.userMessage) ||
+    !looksEnglishDominant(args.content)
+  ) {
+    return args.content;
+  }
+
+  if (args.mode === "miss") {
+    return "Hari ini miss. Jangan ulang alasan yang sama.";
+  }
+
+  if (args.mode === "hesitation") {
+    return "Alasan doang. Jangan nunggu, langsung gerak sekarang.";
+  }
+
+  if (args.mode === "completion") {
+    return "Sudah masuk. Jangan santai, lanjut konsisten.";
+  }
+
+  if (args.mode === "clarify_workout") {
+    return "Detail latihannya apa? Tulis gerakan + set/reps/berat.";
+  }
+
+  return args.content;
+}
+
+function enforceDirectCueForStrictModes(args: {
+  content: string;
+  userMessage: string;
+  mode: ResponseMode;
+}) {
+  if (args.mode !== "hesitation" && args.mode !== "miss") {
+    return args.content;
+  }
+
+  if (hasRequiredDirectCue(args.content)) {
+    return args.content;
+  }
+
+  const suffix = looksLikeIndonesian(args.userMessage)
+    ? "Jangan cari alasan, langsung gerak."
+    : "Move now.";
+  return `${args.content} ${suffix}`
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .trim();
+}
+
+function looksLikeIndonesian(text: string) {
+  const lowered = text.toLowerCase();
+  const signals = [
+    "gue",
+    "lo",
+    "aku",
+    "kamu",
+    "nggak",
+    "ga ",
+    "gak",
+    "hari ini",
+    "besok",
+    "jadwal",
+    "skip",
+    "geser",
+  ];
+  return signals.some((signal) => lowered.includes(signal));
+}
+
+function buildModelUnavailableReply(userMessage: string) {
+  if (looksLikeIndonesian(userMessage)) {
+    return "Tunggu. ulangin bentar lagi, lagi malas mikir ni.";
+  }
+
+  return "Soo confuse cause a lot of things right now. Try again in a moment okey?.";
 }
 
 function findHabitByName(habits: Doc<"habits">[], habitName: string | null) {
@@ -1173,6 +1931,9 @@ async function logModelTrace(args: {
     finalProvider: args.trace.finalProvider,
     finalModel: args.trace.finalModel,
     fallbackDepth: args.trace.fallbackDepth,
+    inputTokens: args.trace.inputTokens,
+    outputTokens: args.trace.outputTokens,
+    estimatedCostUsd: args.trace.estimatedCostUsd,
     attempts: args.trace.attempts,
     createdAt: args.createdAt,
   });
@@ -1195,6 +1956,8 @@ async function extractChatOutcome(input: {
   const prompt = {
     source: input.source,
     todayDate: input.context.date,
+    timezone: input.context.timezone,
+    currentTimeContext: summarizeCurrentTimeContext(input.context),
     todayDayKey: input.context.todayDayKey,
     pendingClarificationHabitId: input.context.pendingClarificationHabitId,
     todayHabits: input.context.todayHabits.map(summarizeHabit),
@@ -1214,6 +1977,7 @@ async function extractChatOutcome(input: {
         "You classify habit-coach chat messages into structured JSON only. " +
         "Return valid JSON with keys classification, habitName, shouldLogCheckIn, checkInStatus, questionFocus, reason, conversationSummary, needsWorkoutClarification, workout. " +
         "classification must be one of completed, missed, question, excuse, bonus, clarify_workout. " +
+        "Use currentTimeContext when the user asks whether something is still safe today, already late, or already missed. " +
         "checkInStatus must be completed, missed, bonus, or null. " +
         "questionFocus must be one of general, pattern, status, schedule. " +
         "questionFocus=pattern means the user asks about trend, pattern, progress lately, what keeps happening, recurring issues, or why a habit has been slipping. " +
@@ -1281,6 +2045,50 @@ function normalizeOperationalExtraction(
   };
 }
 
+function applyDeterministicOperationalOverride(args: {
+  content: string;
+  extraction: OperationalExtractionResult | null;
+  context: ChatContext;
+  pendingAction: Doc<"agentPendingActions"> | null;
+}) {
+  if (args.extraction?.intent) {
+    return args.extraction;
+  }
+
+  const lowered = args.content.toLowerCase();
+  const hasSkipVerb = /\bskip\b/.test(lowered) || /\blewati\b/.test(lowered);
+  if (!hasSkipVerb) {
+    return args.extraction;
+  }
+
+  const targetDate = lowered.includes("besok")
+    ? shiftDateKey(args.context.date, 1)
+    : lowered.includes("hari ini")
+      ? args.context.date
+      : null;
+  if (!targetDate) {
+    return args.extraction;
+  }
+
+  const mentionedHabits = args.context.activeHabits.filter((habit) =>
+    lowered.includes(habit.name.toLowerCase()),
+  );
+  const habitName =
+    mentionedHabits.length === 1 ? mentionedHabits[0].name : null;
+
+  return {
+    intent: "skip_habit_for_date",
+    habitName,
+    targetDate,
+    targetTime: null,
+    taskTitle: null,
+    continuePendingAction: false,
+    supersedePendingAction: Boolean(args.pendingAction),
+    clarificationQuestion:
+      habitName == null && targetDate != null ? "Mau skip habit apa?" : null,
+  } satisfies OperationalExtractionResult;
+}
+
 async function extractOperationalOutcome(input: {
   content: string;
   context: ChatContext;
@@ -1288,7 +2096,8 @@ async function extractOperationalOutcome(input: {
 }) {
   const prompt = {
     todayDate: input.context.date,
-    timezone: input.context.user.timezone ?? "UTC",
+    timezone: input.context.timezone,
+    currentTimeContext: summarizeCurrentTimeContext(input.context),
     todayHabit: input.context.todayHabit
       ? summarizeHabit(input.context.todayHabit)
       : null,
@@ -1313,6 +2122,7 @@ async function extractOperationalOutcome(input: {
         "You detect operational habit and secretary commands plus clarification follow-ups. " +
         "Return valid JSON only with keys intent, habitName, targetDate, targetTime, taskTitle, continuePendingAction, supersedePendingAction, clarificationQuestion. " +
         "intent must be one of reschedule_habit_time, skip_habit_for_date, create_task, ask_today_plan, ask_tomorrow_plan, risk_scan, simple_reschedule_suggestion, or none. " +
+        "Use currentTimeContext when the user references relative timing like sekarang, nanti, masih sempat, kelewat, hari ini, or malam ini. " +
         "ask_today_plan is only for requests about today's agenda, what's left today, what is not finished today, or today's remaining work. " +
         "ask_tomorrow_plan is only for requests about tomorrow's agenda or tomorrow's plan. " +
         "risk_scan is only for requests asking which item is most at risk, most likely to be missed, or most rawan kelewat. " +
@@ -1360,11 +2170,46 @@ function buildOperationalRoute(input: {
   const pendingPayload = input.pendingAction?.payload as
     | Record<string, string | null>
     | undefined;
-  const intent =
+  const extractedTargetDate = isDateKey(input.extraction.targetDate)
+    ? input.extraction.targetDate
+    : null;
+  const extractedTargetTime = isTimeKey(input.extraction.targetTime)
+    ? input.extraction.targetTime
+    : null;
+  const inferredPendingContinuation =
+    Boolean(
+      input.pendingAction &&
+      !input.extraction.supersedePendingAction &&
+      !input.extraction.continuePendingAction &&
+      input.pendingAction.missingFields.some((field) => {
+        if (field === "date") {
+          return Boolean(extractedTargetDate);
+        }
+        if (field === "time") {
+          return Boolean(extractedTargetTime);
+        }
+        if (field === "title") {
+          return Boolean(input.extraction.taskTitle);
+        }
+        if (field === "habit") {
+          return Boolean(input.extraction.habitName);
+        }
+        return false;
+      }) &&
+      !input.extraction.taskTitle &&
+      !input.extraction.habitName,
+    ) || false;
+  const rawIntent =
     input.extraction.intent ??
-    (input.extraction.continuePendingAction && input.pendingAction
+    ((input.extraction.continuePendingAction || inferredPendingContinuation) &&
+    input.pendingAction
       ? (input.pendingAction.intent as OperationalIntent)
       : null);
+  const intent =
+    rawIntent === "simple_reschedule_suggestion" &&
+    (Boolean(input.extraction.habitName) || Boolean(extractedTargetTime))
+      ? ("reschedule_habit_time" as const)
+      : rawIntent;
 
   if (!intent) {
     return {
@@ -1387,39 +2232,47 @@ function buildOperationalRoute(input: {
     };
   }
 
-  const fallbackHabit =
-    input.pendingAction?.targetHabitId
-      ? (input.context.activeHabits.find(
-          (habit) => habit._id === input.pendingAction?.targetHabitId,
-        ) ?? null)
-      : null;
+  const fallbackHabit = input.pendingAction?.targetHabitId
+    ? (input.context.activeHabits.find(
+        (habit) => habit._id === input.pendingAction?.targetHabitId,
+      ) ?? null)
+    : null;
   const resolvedHabit =
     findHabitByName(input.context.activeHabits, input.extraction.habitName) ??
     fallbackHabit ??
-    findHabitByName(input.context.activeHabits, pendingPayload?.habitName ?? null) ??
-    (input.context.activeHabits.length === 1 ? input.context.activeHabits[0] : null);
+    findHabitByName(
+      input.context.activeHabits,
+      pendingPayload?.habitName ?? null,
+    ) ??
+    (input.context.activeHabits.length === 1
+      ? input.context.activeHabits[0]
+      : null);
 
   const targetDate =
-    input.extraction.targetDate ??
+    extractedTargetDate ??
     (intent === "ask_today_plan"
       ? input.context.date
       : intent === "ask_tomorrow_plan"
         ? shiftDateKey(input.context.date, 1)
         : intent === "simple_reschedule_suggestion"
-        ? shiftDateKey(input.context.date, 1)
-        : null) ??
-    (input.extraction.continuePendingAction
-      ? pendingPayload?.targetDate ?? null
+          ? shiftDateKey(input.context.date, 1)
+          : null) ??
+    (input.extraction.continuePendingAction || inferredPendingContinuation
+      ? isDateKey(pendingPayload?.targetDate ?? null)
+        ? (pendingPayload?.targetDate ?? null)
+        : null
       : null);
   const targetTime =
-    input.extraction.targetTime ??
-    (input.extraction.continuePendingAction
-      ? pendingPayload?.targetTime ?? null
+    extractedTargetTime ??
+    (input.extraction.continuePendingAction || inferredPendingContinuation
+      ? isTimeKey(pendingPayload?.targetTime ?? null)
+        ? (pendingPayload?.targetTime ?? null)
+        : null
       : null);
   const taskTitle =
     input.extraction.taskTitle ??
-    (input.extraction.continuePendingAction
-      ? pendingPayload?.taskTitle ?? null
+    (input.extraction.continuePendingAction || inferredPendingContinuation
+      ? (pendingPayload?.taskTitle ?? null)
       : null);
 
   const missingFields =
@@ -1430,16 +2283,10 @@ function buildOperationalRoute(input: {
           ...(targetTime ? [] : ["time"]),
         ]
       : intent === "skip_habit_for_date"
-        ? [
-            ...(resolvedHabit ? [] : ["habit"]),
-            ...(targetDate ? [] : ["date"]),
-          ]
+        ? [...(resolvedHabit ? [] : ["habit"]), ...(targetDate ? [] : ["date"])]
         : intent === "create_task"
-          ? [
-              ...(taskTitle ? [] : ["title"]),
-              ...(targetDate ? [] : ["date"]),
-            ]
-        : [];
+          ? [...(taskTitle ? [] : ["title"]), ...(targetDate ? [] : ["date"])]
+          : [];
 
   return {
     route: {
@@ -1495,6 +2342,10 @@ function deriveCompletionStatus(args: {
     : ("bonus" as const);
 }
 
+function shouldTreatCompletionAsDuplicate(existing: Doc<"checkIns"> | null) {
+  return Boolean(existing && existing.status !== "missed");
+}
+
 function resolveTurn(input: {
   context: ChatContext;
   extraction: ChatExtractionResult;
@@ -1503,7 +2354,7 @@ function resolveTurn(input: {
   continuingPendingAction: boolean;
   resolvedHabit: Doc<"habits"> | null;
   pendingWorkoutHabit: Doc<"habits"> | null;
-}) : ResolvedTurn {
+}): ResolvedTurn {
   const pendingActionToCancel =
     input.pendingAction && !input.continuingPendingAction
       ? input.pendingAction
@@ -1532,17 +2383,18 @@ function resolveTurn(input: {
   }
 
   if (input.extraction.classification === "missed" && input.resolvedHabit) {
-    const duplicate = input.context.todayCheckIns.some(
-      (entry) => entry.habitId === input.resolvedHabit?._id,
-    );
+    const existingTodayCheckIn =
+      input.context.todayCheckIns.find(
+        (entry) => entry.habitId === input.resolvedHabit?._id,
+      ) ?? null;
 
-    if (duplicate) {
+    if (existingTodayCheckIn) {
       return {
         kind: "duplicate_no_op",
         userIntent: "log_miss",
         requiredAction: "log_miss",
         resolvedHabit: input.resolvedHabit,
-        checkInStatus: "missed",
+        checkInStatus: existingTodayCheckIn.status,
         extraction: input.extraction,
         pendingActionToCancel,
       };
@@ -1560,7 +2412,10 @@ function resolveTurn(input: {
     };
   }
 
-  if (input.extraction.classification === "clarify_workout" && input.pendingWorkoutHabit) {
+  if (
+    input.extraction.classification === "clarify_workout" &&
+    input.pendingWorkoutHabit
+  ) {
     const workoutHabit = input.pendingWorkoutHabit;
     const completionStatus = deriveCompletionStatus({
       resolvedHabit: workoutHabit,
@@ -1580,17 +2435,21 @@ function resolveTurn(input: {
       };
     }
 
-    const duplicate = input.context.todayCheckIns.some(
-      (entry) => entry.habitId === workoutHabit._id,
-    );
+    const existingTodayCheckIn =
+      input.context.todayCheckIns.find(
+        (entry) => entry.habitId === workoutHabit._id,
+      ) ?? null;
 
-    if (duplicate) {
+    if (
+      existingTodayCheckIn &&
+      shouldTreatCompletionAsDuplicate(existingTodayCheckIn)
+    ) {
       return {
         kind: "duplicate_no_op",
         userIntent: "log_completion",
         requiredAction: "log_completion",
         resolvedHabit: workoutHabit,
-        checkInStatus: completionStatus,
+        checkInStatus: existingTodayCheckIn.status,
         extraction: input.extraction,
         pendingActionToCancel,
       };
@@ -1632,17 +2491,21 @@ function resolveTurn(input: {
       };
     }
 
-    const duplicate = input.context.todayCheckIns.some(
-      (entry) => entry.habitId === completionHabit._id,
-    );
+    const existingTodayCheckIn =
+      input.context.todayCheckIns.find(
+        (entry) => entry.habitId === completionHabit._id,
+      ) ?? null;
 
-    if (duplicate) {
+    if (
+      existingTodayCheckIn &&
+      shouldTreatCompletionAsDuplicate(existingTodayCheckIn)
+    ) {
       return {
         kind: "duplicate_no_op",
         userIntent: "log_completion",
         requiredAction: "log_completion",
         resolvedHabit: completionHabit,
-        checkInStatus: completionStatus,
+        checkInStatus: existingTodayCheckIn.status,
         extraction: input.extraction,
         pendingActionToCancel,
       };
@@ -1682,6 +2545,7 @@ async function generateCoachReply(input: {
 }) {
   const prompt = {
     userMessage: input.content,
+    currentTimeContext: summarizeCurrentTimeContext(input.context),
     resolvedTurnKind: input.resolvedTurnKind ?? null,
     mode: input.decision.mode,
     classification: input.extraction.classification,
@@ -1697,6 +2561,10 @@ async function generateCoachReply(input: {
     resolvedHabit: input.resolvedHabit
       ? summarizeHabit(input.resolvedHabit)
       : null,
+    resolvedHabitTimeContext: buildHabitTimeContext(
+      input.context,
+      input.resolvedHabit,
+    ),
     patternSummary: summarizePatternSummary(input.decision.patternSummary),
     primaryQuestionSignal: getPrimaryQuestionSignal({
       decision: input.decision,
@@ -1712,6 +2580,10 @@ async function generateCoachReply(input: {
     todayHabit: input.context.todayHabit
       ? summarizeHabit(input.context.todayHabit)
       : null,
+    todayHabitTimeContext: buildHabitTimeContext(
+      input.context,
+      input.context.todayHabit,
+    ),
     todayCheckIns: input.context.todayCheckIns.map(summarizeCheckIn),
     todayReminderStatus: input.context.todayReminderStatus,
   };
@@ -1723,6 +2595,8 @@ async function generateCoachReply(input: {
         "You are the Streak coach: blunt, concise, slightly brutal, never rambling. " +
         "Write 1 to 4 short sentences, no markdown, no emojis. " +
         "Reply in the same language and general tone as the user's message. If the user writes informal Indonesian, reply in informal Indonesian. Do not mix languages unless the user already did. " +
+        "Voice must be cynical, sharp, and direct. Never sound like customer support. " +
+        "Never use polite apology/request words such as maaf, silakan, tolong, mohon, or please. " +
         "Use mode to decide behavior. " +
         "If requiresClarification is true, ask specifically what workout they did so it can be logged. " +
         "If duplicateCheckIn is true, tell them today's result is already logged. " +
@@ -1730,10 +2604,13 @@ async function generateCoachReply(input: {
         "If resolvedTurnKind is checkin_clarification, do not pretend anything was logged yet. " +
         "If workoutDetailStatus is needs_more_detail, ask for more detail and do not confirm success. " +
         "If actionStatus is no_op, acknowledge it was already logged instead of pretending a new mutation happened. " +
-        "For completion mode, acknowledge the result and push toward the next concrete action. " +
+        "For completion mode, acknowledge the result with cynical buddy tone, then give side-eye or pressure to stay consistent. " +
+        "For completion mode, do not use generic positive or admin closers such as fokus ke, jaga momentum, semangat, keep it up, tunggu jadwal berikutnya, langkah berikutnya, reset dan fokus, or sudah tercatat as a flat opener. " +
         "For miss mode, call out the miss, use at most one relevant pattern signal, and reset focus toward the next scheduled chance. " +
         "For hesitation mode, treat excuses as resistance, not as a logged miss, and push the smallest next action. " +
+        "For miss and hesitation mode, include at least one direct cue word: jangan, harus, langsung, alasan, tidur sana, or mau. " +
         "For question mode, answer briefly and prioritize the most useful signal for the question. " +
+        "Use currentTimeContext, resolvedHabitTimeContext, and todayHabitTimeContext to judge urgency. If the scheduled time already passed, say it plainly. If the deadline already passed, do not talk like there is still plenty of time left. " +
         "If questionFocus is pattern, lead with primaryQuestionSignal when it exists. Prefer repeated reasons, repeated misses, recovery-after-prompt, or reminder-ignore patterns over generic weekly counts. " +
         "If questionFocus is status, use the clearest current-state signal first, then at most one supporting memory clue. " +
         "Use supportingQuestionSignal only if it adds one useful layer, not as a second paragraph. " +
@@ -1750,8 +2627,19 @@ async function generateCoachReply(input: {
     },
   ]);
 
+  const brutalContent = enforceBrutalDiction(result.content);
+  const languageAlignedContent = enforceReplyLanguage({
+    content: brutalContent,
+    userMessage: input.content,
+    mode: input.decision.mode,
+  });
+
   return {
-    content: result.content.trim(),
+    content: enforceDirectCueForStrictModes({
+      content: languageAlignedContent,
+      userMessage: input.content,
+      mode: input.decision.mode,
+    }),
     trace: result.trace,
   };
 }
@@ -1807,7 +2695,7 @@ function buildChatDecision(input: {
         ? "schedule_update"
         : input.requiredAction === "create_task"
           ? "task_update"
-        : "clarify_workout";
+          : "clarify_workout";
   } else if (
     input.requiredAction === "ask_today_plan" ||
     input.requiredAction === "ask_tomorrow_plan" ||
@@ -1864,140 +2752,13 @@ function buildChatDecision(input: {
   };
 }
 
-function buildPlannerReply(input: {
-  intent: "ask_today_plan" | "ask_tomorrow_plan";
-  plan: PlannerPlan;
-}) {
-  const title =
-    input.intent === "ask_today_plan"
-      ? "Plan hari ini:"
-      : "Plan besok:";
-
-  if (input.plan.items.length === 0) {
-    return `${title} ga ada item aktif yang perlu lo kerjain. Jangan buang harinya.`;
-  }
-
-  const lines = input.plan.items.map((item) => {
-    const prefix = item.scheduledTime ? `${item.scheduledTime} ` : "";
-
-    if (item.status === "skipped") {
-      return `- ${prefix}${item.title}: skip sengaja.`;
-    }
-
-    if (item.status === "completed" || item.status === "done") {
-      return `- ${prefix}${item.title}: sudah kelar.`;
-    }
-
-    if (item.status === "missed") {
-      return `- ${prefix}${item.title}: sudah miss.`;
-    }
-
-    if (item.status === "bonus") {
-      return `- ${prefix}${item.title}: bonus sudah masuk.`;
-    }
-
-    if (item.status === "cancelled") {
-      return `- ${prefix}${item.title}: dibatalin.`;
-    }
-
-    return `- ${prefix}${item.title}: ${item.riskNote}.`;
-  });
-
-  return [title, ...lines].join("\n");
-}
-
-function buildRiskScanReply(input: { risk: RiskScanResult }) {
-  if (input.risk.items.length === 0) {
-    return "Yang rawan minggu ini belum kelihatan parah. Tetap jaga ritme aja.";
-  }
-
-  const lines = input.risk.items.map((item, index) => {
-    const timing = item.scheduledTime
-      ? `${item.date} ${item.scheduledTime}`
-      : item.date;
-    return `${index + 1}. ${item.title} (${timing}): ${item.reason}. ${item.suggestion}`;
-  });
-
-  return ["Paling rawan minggu ini:", ...lines].join("\n");
-}
-
-function buildRescheduleSuggestionReply(input: {
-  suggestions: RescheduleSuggestionResult;
-}) {
-  if (input.suggestions.items.length === 0) {
-    return "Besok belum ada bentrok yang cukup jelas buat digeser. Schedule-nya masih aman.";
-  }
-
-  const lines = input.suggestions.items.map((item) => {
-    if (item.currentTime && item.suggestedTime) {
-      return `- ${item.title}: dari ${item.currentTime} ke ${item.suggestedTime} karena ${item.reason}.`;
-    }
-
-    if (item.suggestedTime) {
-      return `- ${item.title}: kasih slot ${item.suggestedTime} karena ${item.reason}.`;
-    }
-
-    return `- ${item.title}: ini yang paling enak digeser karena ${item.reason}.`;
-  });
-
-  return ["Yang paling enak digeser besok:", ...lines].join("\n");
-}
-
-function fallbackOperationalReply(input: {
-  decision: ChatDecision;
-  habitName: string | null;
-  plan?: PlannerPlan | null;
-  risk?: RiskScanResult | null;
-  suggestions?: RescheduleSuggestionResult | null;
-}) {
-  if (input.decision.requiresClarification && input.decision.clarificationQuestion) {
-    return input.decision.clarificationQuestion;
-  }
-
-  if (
-    input.decision.requiredAction === "ask_today_plan" ||
-    input.decision.requiredAction === "ask_tomorrow_plan"
-  ) {
-    return buildPlannerReply({
-      intent: input.decision.requiredAction,
-      plan: input.plan ?? { date: "", items: [], dayKey: "" },
-    });
-  }
-
-  if (input.decision.requiredAction === "risk_scan") {
-    return buildRiskScanReply({
-      risk: input.risk ?? { startDate: "", items: [] },
-    });
-  }
-
-  if (input.decision.requiredAction === "simple_reschedule_suggestion") {
-    return buildRescheduleSuggestionReply({
-      suggestions: input.suggestions ?? { date: "", items: [] },
-    });
-  }
-
-  if (input.decision.requiredAction === "reschedule_habit_time") {
-    return `${input.habitName ?? "Habit"} gue geser ke ${input.decision.targetTime} untuk ${input.decision.targetDate}.`;
-  }
-
-  if (input.decision.requiredAction === "skip_habit_for_date") {
-    return `${input.habitName ?? "Habit"} gue tandai skip untuk ${input.decision.targetDate}. Jangan pura-pura lupa besoknya.`;
-  }
-
-  if (input.decision.requiredAction === "create_task") {
-    const timing = input.decision.targetTime
-      ? ` jam ${input.decision.targetTime}`
-      : "";
-    return `${input.decision.taskTitle ?? "Task"} gue masukin untuk ${input.decision.targetDate}${timing}.`;
-  }
-
-  return null;
-}
-
 async function generateOperationalReply(input: {
   userMessage: string;
+  context: ChatContext;
   decision: ChatDecision;
   habitName: string | null;
+  actionResultSummary?: string | null;
+  actionNoOpReason?: "already_exists" | "not_scheduled_on_target_date" | null;
   plan?: PlannerPlan | null;
   risk?: RiskScanResult | null;
   suggestions?: RescheduleSuggestionResult | null;
@@ -2005,6 +2766,7 @@ async function generateOperationalReply(input: {
 }) {
   const prompt = {
     userMessage: input.userMessage,
+    currentTimeContext: summarizeCurrentTimeContext(input.context),
     intent: input.decision.intent,
     requiredAction: input.decision.requiredAction,
     mode: input.decision.mode,
@@ -2015,6 +2777,8 @@ async function generateOperationalReply(input: {
     requiresClarification: input.decision.requiresClarification,
     clarificationQuestion: input.decision.clarificationQuestion,
     actionStatus: input.actionStatus,
+    actionResultSummary: input.actionResultSummary ?? null,
+    actionNoOpReason: input.actionNoOpReason ?? null,
     plan: input.plan,
     risk: input.risk,
     suggestions: input.suggestions,
@@ -2027,6 +2791,9 @@ async function generateOperationalReply(input: {
         "You write short operational habit assistant replies. " +
         "Keep it concise, natural, and useful. No markdown unless the reply is a planner list. " +
         "Reply in the same language as the user's message. If the user writes informal Indonesian, reply in informal Indonesian. Do not mix languages unless the user did. " +
+        "Voice must stay cynical, direct, and strict. Never sound apologetic or overly polite. " +
+        "Never use maaf, silakan, tolong, mohon, or please. " +
+        "Use currentTimeContext plus plan item timingState and timingNote when available so you clearly distinguish upcoming, overdue, deadline-passed, and already-done items. " +
         "If requiresClarification is true, ask only for the missing fields. " +
         "For planner replies, use a short title and one flat line per item. " +
         "For risk_scan replies, return a short ranked list with at most 3 items. " +
@@ -2035,6 +2802,9 @@ async function generateOperationalReply(input: {
         "For skip confirmation, clearly confirm the skipped date without treating it like a miss. " +
         "For create_task confirmation, clearly confirm the task title, date, and time if available. " +
         "If actionStatus is no_op, say it was already set/logged instead of pretending something changed. " +
+        "If actionNoOpReason is not_scheduled_on_target_date, this overrides generic no_op wording. Explicitly say the habit is not scheduled on that date and no mutation was applied, then roast briefly. " +
+        "For Indonesian replies in this case, include the words 'jadwal' and 'kosong', and use one direct cue like 'mau' or 'tidur sana'. " +
+        "Style example only (do not copy verbatim): 'Jadwal [habit] di [date] kosong, mau skip apa? Tidur sana.' " +
         "Do not invent unsupported features or extra mutations.",
     },
     {
@@ -2044,7 +2814,7 @@ async function generateOperationalReply(input: {
   ]);
 
   return {
-    content: result.content.trim(),
+    content: enforceBrutalDiction(result.content),
     trace: result.trace,
   };
 }
@@ -2052,6 +2822,7 @@ async function generateOperationalReply(input: {
 export const sendMessage = action({
   args: {
     content: v.string(),
+    nowOverrideTs: v.optional(v.number()),
     source: v.union(
       v.literal("chat_input"),
       v.literal("quick_complete"),
@@ -2084,7 +2855,7 @@ export const sendMessage = action({
       throw new Error("Message content is required");
     }
 
-    const now = Date.now();
+    const now = args.nowOverrideTs ?? Date.now();
     const context = (await ctx.runQuery(internal.chat.getChatContext, {
       clerkId: identity.subject,
       now,
@@ -2155,27 +2926,30 @@ export const sendMessage = action({
       userId: context.user._id,
       habitId:
         context.pendingClarificationHabitId ??
-        (context.todayHabits.length === 1 ? context.todayHabits[0]?._id : undefined),
+        (context.todayHabits.length === 1
+          ? context.todayHabits[0]?._id
+          : undefined),
       role: "user",
       content,
       intent: "check_in",
       timestamp: now,
     })) as Id<"messages">;
 
-    const [chatExtractionResult, operationalExtractionResult] = await Promise.all([
-      extractChatOutcome({
-        content,
-        source: args.source,
-        context,
-      }),
-      args.source === "chat_input"
-        ? extractOperationalOutcome({
-            content,
-            context,
-            pendingAction,
-          })
-        : Promise.resolve(null),
-    ]);
+    const [chatExtractionResult, operationalExtractionResult] =
+      await Promise.all([
+        extractChatOutcome({
+          content,
+          source: args.source,
+          context,
+        }),
+        args.source === "chat_input"
+          ? extractOperationalOutcome({
+              content,
+              context,
+              pendingAction,
+            })
+          : Promise.resolve(null),
+      ]);
 
     const pendingHabit =
       context.pendingClarificationHabitId != null
@@ -2183,10 +2957,29 @@ export const sendMessage = action({
             (habit) => habit._id === context.pendingClarificationHabitId,
           ) ?? null)
         : null;
-    const extraction = applyDeterministicWorkoutResolution({
+    const missHesitationSafetyResult =
+      await applyMissHesitationSafetyResolution({
+        content,
+        extraction: applyDeterministicWorkoutResolution({
+          content,
+          extraction: chatExtractionResult.extraction,
+          pendingWorkoutHabit: pendingHabit,
+        }),
+        source: args.source,
+        context,
+        pendingWorkoutHabit: pendingHabit,
+      });
+    const questionSafetyResult = await applyQuestionSafetyResolution({
       content,
-      extraction: chatExtractionResult.extraction,
+      extraction: missHesitationSafetyResult.extraction,
+      source: args.source,
+      context,
       pendingWorkoutHabit: pendingHabit,
+    });
+    const extraction = applyMissKeywordGuard({
+      content,
+      extraction: questionSafetyResult.extraction,
+      source: args.source,
     });
     const explicitHabit = findHabitByName(
       context.activeHabits,
@@ -2209,18 +3002,31 @@ export const sendMessage = action({
       missingFields: [],
       payload: {},
     };
-    const operationalExtraction = operationalExtractionResult?.extraction ?? null;
+    const operationalSafetyResult = await applyOperationalSafetyResolution({
+      content,
+      extraction: operationalExtractionResult?.extraction ?? null,
+      chatExtraction: extraction,
+      source: args.source,
+      context,
+      pendingAction,
+    });
+    const operationalExtraction = applyDeterministicOperationalOverride({
+      content,
+      extraction: operationalSafetyResult.extraction ?? null,
+      context,
+      pendingAction,
+    });
     const operationalRoute = operationalExtraction
-      ? buildOperationalRoute({
+      ? (buildOperationalRoute({
           extraction: operationalExtraction,
           context,
           pendingAction,
-        }).route as OperationalRoute
+        }).route as OperationalRoute)
       : emptyOperationalRoute;
     const continuingPendingAction = Boolean(
       pendingAction &&
-        operationalExtraction?.continuePendingAction &&
-        !operationalExtraction?.supersedePendingAction,
+      operationalExtraction?.continuePendingAction &&
+      !operationalExtraction?.supersedePendingAction,
     );
 
     await logModelTrace({
@@ -2235,6 +3041,34 @@ export const sendMessage = action({
       createdAt: now,
     });
 
+    if (missHesitationSafetyResult.trace) {
+      await logModelTrace({
+        ctx,
+        userId: context.user._id,
+        habitId: pendingHabit?._id ?? undefined,
+        userMessageId,
+        userMessageContent: content,
+        source: "chat",
+        purpose: "miss_hesitation_safety_check",
+        trace: missHesitationSafetyResult.trace,
+        createdAt: now,
+      });
+    }
+
+    if (questionSafetyResult.trace) {
+      await logModelTrace({
+        ctx,
+        userId: context.user._id,
+        habitId: pendingHabit?._id ?? undefined,
+        userMessageId,
+        userMessageContent: content,
+        source: "chat",
+        purpose: "question_safety_check",
+        trace: questionSafetyResult.trace,
+        createdAt: now,
+      });
+    }
+
     if (operationalExtractionResult?.trace) {
       await logModelTrace({
         ctx,
@@ -2245,6 +3079,20 @@ export const sendMessage = action({
         source: "chat",
         purpose: "operational_extraction",
         trace: operationalExtractionResult.trace,
+        createdAt: now,
+      });
+    }
+
+    if (operationalSafetyResult.trace) {
+      await logModelTrace({
+        ctx,
+        userId: context.user._id,
+        habitId: pendingAction?.targetHabitId ?? undefined,
+        userMessageId,
+        userMessageContent: content,
+        source: "chat",
+        purpose: "operational_safety_check",
+        trace: operationalSafetyResult.trace,
         createdAt: now,
       });
     }
@@ -2335,25 +3183,20 @@ export const sendMessage = action({
         taskTitle: resolvedTurn.route.taskTitle,
       });
 
-      const operationalReplyResult =
-        (await generateOperationalReply({
-          userMessage: content,
-          decision,
-          habitName: resolvedTurn.resolvedHabit?.name ?? null,
-          actionStatus: "executed",
-        }).catch(() =>
-          Promise.resolve({
-            content: fallbackOperationalReply({
-              decision,
-              habitName: resolvedTurn.resolvedHabit?.name ?? null,
-            }),
-            trace: null,
-          }),
-        )) ?? { content: null, trace: null };
+      const operationalReplyResult = (await generateOperationalReply({
+        userMessage: content,
+        context: effectiveMemoryContext,
+        decision,
+        habitName: resolvedTurn.resolvedHabit?.name ?? null,
+        actionStatus: "executed",
+      }).catch(() =>
+        Promise.resolve({
+          content: buildModelUnavailableReply(content),
+          trace: null,
+        }),
+      )) ?? { content: null, trace: null };
       const aiContent =
-        operationalReplyResult.content ??
-        resolvedTurn.route.clarificationQuestion ??
-        "Bikin jelas dulu.";
+        operationalReplyResult.content ?? buildModelUnavailableReply(content);
 
       await ctx.runMutation(internal.agentActions.logAction, {
         userId: context.user._id,
@@ -2413,6 +3256,10 @@ export const sendMessage = action({
 
       let habitName: string | null = resolvedTurn.resolvedHabit?.name ?? null;
       let actionStatus: "executed" | "no_op" = "executed";
+      let actionNoOpReason:
+        | "already_exists"
+        | "not_scheduled_on_target_date"
+        | null = null;
       let actionResultSummary = "";
       let plan: PlannerPlan | null = null;
       let risk: RiskScanResult | null = null;
@@ -2429,12 +3276,21 @@ export const sendMessage = action({
             targetTime: resolvedTurn.route.targetTime!,
           },
         )) as {
+          status: "executed" | "no_op";
+          reason: "not_scheduled_on_target_date" | null;
           habitName: string;
           targetDate: string;
           targetTime: string;
         };
         habitName = result.habitName;
-        actionResultSummary = `rescheduled to ${result.targetDate} ${result.targetTime}`;
+        actionStatus = result.status;
+        actionNoOpReason = result.reason;
+        actionResultSummary =
+          result.status === "no_op"
+            ? result.reason === "not_scheduled_on_target_date"
+              ? `reschedule ignored because habit is not scheduled on ${result.targetDate}`
+              : `reschedule no-op for ${result.targetDate}`
+            : `rescheduled to ${result.targetDate} ${result.targetTime}`;
       } else if (resolvedTurn.requiredAction === "skip_habit_for_date") {
         const result = (await ctx.runMutation(
           internal.agentActions.executeSkipHabitForDate,
@@ -2449,21 +3305,28 @@ export const sendMessage = action({
           habitName: string;
           date: string;
           status: "executed" | "no_op";
+          reason: "already_exists" | "not_scheduled_on_target_date" | null;
         };
         habitName = result.habitName;
         actionStatus = result.status;
+        actionNoOpReason = result.reason;
         actionResultSummary =
           result.status === "no_op"
-            ? `skip already existed for ${result.date}`
+            ? result.reason === "not_scheduled_on_target_date"
+              ? `skip ignored because habit is not scheduled on ${result.date}`
+              : `skip already existed for ${result.date}`
             : `skip created for ${result.date}`;
       } else if (resolvedTurn.requiredAction === "create_task") {
-        const result = (await ctx.runMutation(internal.agentActions.createTask, {
-          userId: context.user._id,
-          title: resolvedTurn.route.taskTitle!,
-          date: resolvedTurn.route.targetDate!,
-          time: resolvedTurn.route.targetTime ?? undefined,
-          now,
-        })) as {
+        const result = (await ctx.runMutation(
+          internal.agentActions.createTask,
+          {
+            userId: context.user._id,
+            title: resolvedTurn.route.taskTitle!,
+            date: resolvedTurn.route.targetDate!,
+            time: resolvedTurn.route.targetTime ?? undefined,
+            now,
+          },
+        )) as {
           status: "executed" | "no_op";
           taskId: Id<"agentTasks">;
           title: string;
@@ -2500,7 +3363,8 @@ export const sendMessage = action({
           internal.agentActions.getSimpleRescheduleSuggestions,
           {
             userId: context.user._id,
-            date: resolvedTurn.route.targetDate ?? shiftDateKey(context.date, 1),
+            date:
+              resolvedTurn.route.targetDate ?? shiftDateKey(context.date, 1),
             now,
           },
         );
@@ -2540,28 +3404,25 @@ export const sendMessage = action({
         taskTitle: resolvedTurn.route.taskTitle,
       });
 
-      const operationalReplyResult =
-        (await generateOperationalReply({
-          userMessage: content,
-          decision,
-          habitName,
-          plan,
-          risk,
-          suggestions,
-          actionStatus,
-        }).catch(() =>
-          Promise.resolve({
-            content: fallbackOperationalReply({
-              decision,
-              habitName,
-              plan,
-              risk,
-              suggestions,
-            }),
-            trace: null,
-          }),
-        )) ?? { content: "Selesai.", trace: null };
-      const aiContent = operationalReplyResult.content ?? "Selesai.";
+      const operationalReplyResult = (await generateOperationalReply({
+        userMessage: content,
+        context: effectiveMemoryContext,
+        decision,
+        habitName,
+        actionResultSummary,
+        actionNoOpReason,
+        plan,
+        risk,
+        suggestions,
+        actionStatus,
+      }).catch(() =>
+        Promise.resolve({
+          content: buildModelUnavailableReply(content),
+          trace: null,
+        }),
+      )) ?? { content: buildModelUnavailableReply(content), trace: null };
+      const aiContent =
+        operationalReplyResult.content ?? buildModelUnavailableReply(content);
 
       await ctx.runMutation(internal.agentActions.logAction, {
         userId: context.user._id,
@@ -2631,7 +3492,7 @@ export const sendMessage = action({
             ? "planning"
             : resolvedTurn.requiredAction === "create_task"
               ? "task_update"
-            : "schedule_update",
+              : "schedule_update",
         timestamp: now,
       })) as Id<"messages">;
 
@@ -2649,13 +3510,16 @@ export const sendMessage = action({
         createdAt: now,
       });
 
-      const reminderRunAdvance = buildReminderRunChatAdvance({
-        resolvedTurn,
-        context: effectiveMemoryContext,
-        resolvedHabit: resolvedTurn.resolvedHabit,
-        extraction: executionExtraction,
-        content,
-      });
+      const reminderRunAdvance =
+        actionStatus === "executed"
+          ? buildReminderRunChatAdvance({
+              resolvedTurn,
+              context: effectiveMemoryContext,
+              resolvedHabit: resolvedTurn.resolvedHabit,
+              extraction: executionExtraction,
+              content,
+            })
+          : null;
 
       if (reminderRunAdvance) {
         await ctx.runMutation(internal.reminders.advanceReminderRun, {
@@ -2808,7 +3672,7 @@ export const sendMessage = action({
         status:
           resolvedTurn.kind === "duplicate_no_op"
             ? "no_op"
-            : checkInExecutionResult?.status ?? "executed",
+            : (checkInExecutionResult?.status ?? "executed"),
         inputSummary: content,
         resultSummary:
           resolvedTurn.kind === "duplicate_no_op"
@@ -2884,10 +3748,9 @@ export const sendMessage = action({
         habitId: resolvedTurn.resolvedHabit._id,
         date: context.date,
         type: "miss_with_reason",
-        summary:
-          resolvedTurn.extraction.reason?.trim()
-            ? `${resolvedTurn.resolvedHabit.name} missed with reason: ${resolvedTurn.extraction.reason.trim()}`
-            : `${resolvedTurn.resolvedHabit.name} was missed.`,
+        summary: resolvedTurn.extraction.reason?.trim()
+          ? `${resolvedTurn.resolvedHabit.name} missed with reason: ${resolvedTurn.extraction.reason.trim()}`
+          : `${resolvedTurn.resolvedHabit.name} was missed.`,
         metadata: {
           status: "missed",
           reason: resolvedTurn.extraction.reason,
@@ -2906,7 +3769,9 @@ export const sendMessage = action({
         userId: context.user._id,
         habitId: resolvedTurn.resolvedHabit._id,
         date: context.date,
-        type: hasSentReminderToday ? "recovered_after_prompt" : "completed_with_effort",
+        type: hasSentReminderToday
+          ? "recovered_after_prompt"
+          : "completed_with_effort",
         summary: `${resolvedTurn.resolvedHabit.name} completed with concrete workout detail.`,
         metadata: {
           status: resolvedTurn.checkInStatus,
@@ -2927,11 +3792,12 @@ export const sendMessage = action({
         userId: context.user._id,
         habitId: baseResolvedHabit._id,
         date: context.date,
-        type: hasSentReminderToday ? "user_acknowledged" : "hesitation_detected",
-        summary:
-          resolvedTurn.extraction.reason?.trim()
-            ? `${baseResolvedHabit.name} hesitation: ${resolvedTurn.extraction.reason.trim()}`
-            : `${baseResolvedHabit.name} hesitation detected.`,
+        type: hasSentReminderToday
+          ? "user_acknowledged"
+          : "hesitation_detected",
+        summary: resolvedTurn.extraction.reason?.trim()
+          ? `${baseResolvedHabit.name} hesitation: ${resolvedTurn.extraction.reason.trim()}`
+          : `${baseResolvedHabit.name} hesitation detected.`,
         metadata: {
           reason: resolvedTurn.extraction.reason,
           reminderSentToday: hasSentReminderToday,

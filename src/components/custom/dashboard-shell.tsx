@@ -12,6 +12,9 @@ import {
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { api } from "../../../convex/_generated/api";
 import {
@@ -61,11 +64,13 @@ const ONBOARDING_PERSONALITY = "brutal" as const;
 const IS_DEV_MODE = process.env.NODE_ENV !== "production";
 
 type AppTab = "home" | "chat" | "stats" | "profile";
+type StatsRangePreset = "30d" | "90d" | "365d" | "all";
 type HabitDoc = Doc<"habits">;
 type AgentTaskDoc = Doc<"agentTasks">;
 type CheckInDoc = Doc<"checkIns">;
 type HabitSkipDoc = Doc<"habitSkips">;
 type MessageDoc = Doc<"messages">;
+type ReminderDoc = Doc<"reminders">;
 type ReminderRunDoc = Doc<"reminderRuns">;
 type WorkoutLogDoc = Doc<"workoutLogs">;
 type WeeklyReportDoc = Doc<"weeklyReports">;
@@ -210,6 +215,33 @@ function formatFullTime(timestamp: number) {
     minute: "2-digit",
   }).format(new Date(timestamp));
 }
+function formatClockFromHourMinute(time: string) {
+  const [hoursRaw, minutesRaw] = time.split(":");
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    return time;
+  }
+
+  const date = new Date();
+  date.setHours(hours, minutes, 0, 0);
+  return formatTime(date);
+}
+
+function formatHourMinuteKey(timestamp: number) {
+  const date = new Date(timestamp);
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function getScheduledTimeForDay(habit: HabitDoc, dayKey: string) {
+  if (dayKey === "fri" && habit.schedules?.fri?.scheduledTime) {
+    return habit.schedules.fri.scheduledTime;
+  }
+
+  return habit.scheduledTime;
+}
 
 function formatWeekRange(weekStart: string, weekEnd: string) {
   const start = new Date(`${weekStart}T00:00:00`);
@@ -325,6 +357,34 @@ function getWeeklyStats(allCheckIns: CheckInDoc[]) {
   };
 }
 
+function getStatsRangeStartTimestamp(
+  preset: StatsRangePreset,
+  referenceDate: Date,
+) {
+  if (preset === "all") {
+    return null;
+  }
+
+  const days = preset === "30d" ? 30 : preset === "90d" ? 90 : 365;
+  const start = new Date(referenceDate);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return start.getTime();
+}
+
+function formatStatsRangeLabel(preset: StatsRangePreset) {
+  if (preset === "all") {
+    return "All time";
+  }
+  if (preset === "30d") {
+    return "Last 30 days";
+  }
+  if (preset === "90d") {
+    return "Last 90 days";
+  }
+  return "Last 365 days";
+}
+
 function getWeekDays(date: Date) {
   const start = getStartOfWeek(date);
   return DAYS.map((day, index) => {
@@ -368,6 +428,7 @@ function getWeeklyCellState(
   weeklyCheckIns: CheckInDoc[],
   weeklySkips: HabitSkipDoc[],
   weeklyReminderRuns: ReminderRunDoc[],
+  weeklyReminders: ReminderDoc[],
 ): WeekCellMetadata {
   const checkIn = weeklyCheckIns.find(
     (entry) => entry.habitId === habit._id && entry.date === day.dateKey,
@@ -380,6 +441,24 @@ function getWeeklyCellState(
   );
   const isTargetDay = habit.isActive && habit.targetDays.includes(day.key);
   const dateLabel = formatWorkoutDate(day.date.getTime());
+  const defaultScheduledTime = getScheduledTimeForDay(habit, day.key);
+  const defaultScheduledLabel = formatClockFromHourMinute(defaultScheduledTime);
+  const latestCheckInReminder = weeklyReminders
+    .filter(
+      (entry) =>
+        entry.habitId === habit._id &&
+        entry.date === day.dateKey &&
+        entry.type === "check_in",
+    )
+    .sort((left, right) => right.scheduledFor - left.scheduledFor)[0];
+  const latestScheduledLabel = latestCheckInReminder
+    ? formatFullTime(latestCheckInReminder.scheduledFor)
+    : defaultScheduledLabel;
+  const latestScheduledKey = latestCheckInReminder
+    ? formatHourMinuteKey(latestCheckInReminder.scheduledFor)
+    : defaultScheduledTime;
+  const hasRescheduledTime = latestScheduledKey !== defaultScheduledTime;
+  const scheduleTooltipDetails = `Default: ${defaultScheduledLabel}\nLatest: ${latestScheduledLabel}`;
 
   if (checkIn) {
     return {
@@ -413,16 +492,18 @@ function getWeeklyCellState(
     return {
       state: "rescheduled",
       label: "Rescheduled",
-      title: `${dateLabel}: Rescheduled off this slot`,
+      title: `${dateLabel}: Rescheduled\n${scheduleTooltipDetails}`,
       isTargetDay,
     };
   }
 
   if (isTargetDay) {
     return {
-      state: "scheduled",
-      label: "Scheduled",
-      title: `${dateLabel}: Scheduled`,
+      state: hasRescheduledTime ? "rescheduled" : "scheduled",
+      label: hasRescheduledTime ? "Rescheduled" : "Scheduled",
+      title: hasRescheduledTime
+        ? `${dateLabel}: Rescheduled\n${scheduleTooltipDetails}`
+        : `${dateLabel}: Scheduled\n${scheduleTooltipDetails}`,
       isTargetDay,
     };
   }
@@ -441,6 +522,7 @@ function WeekGrid({
   weeklyCheckIns,
   weeklySkips,
   weeklyReminderRuns,
+  weeklyReminders,
   referenceDate,
 }: {
   habit: HabitDoc;
@@ -448,6 +530,7 @@ function WeekGrid({
   weeklyCheckIns: CheckInDoc[];
   weeklySkips: HabitSkipDoc[];
   weeklyReminderRuns: ReminderRunDoc[];
+  weeklyReminders: ReminderDoc[];
   referenceDate: Date;
 }) {
   return (
@@ -459,6 +542,7 @@ function WeekGrid({
           weeklyCheckIns,
           weeklySkips,
           weeklyReminderRuns,
+          weeklyReminders,
         );
         const isToday = day.dateKey === toDateKey(referenceDate);
         const style =
@@ -1484,10 +1568,9 @@ function buildHighlightAlertCards(args: {
             (snapshot.countdownMinutes ?? 1) > 0),
       )
       .sort(rankHabitSnapshots)[0] ?? null;
-  const pendingTask =
-    [...args.tasks]
-      .filter((task) => task.status === "pending")
-      .sort(compareTaskScheduleAsc)[0] ?? null;
+  const pendingTasks = [...args.tasks]
+    .filter((task) => task.status === "pending")
+    .sort(compareTaskScheduleAsc);
 
   const cards: HighlightAlertCard[] = [];
 
@@ -1558,8 +1641,9 @@ function buildHighlightAlertCards(args: {
     });
   }
 
-  if (pendingTask) {
+  pendingTasks.forEach((pendingTask) => {
     const taskDate = new Date(`${pendingTask.date}T00:00:00`);
+    const taskTime = pendingTask.time ?? "No time set";
     cards.push({
       kind: "task",
       id: `task-${pendingTask._id}`,
@@ -1568,11 +1652,11 @@ function buildHighlightAlertCards(args: {
       title: pendingTask.title,
       support:
         pendingTask.date === toDateKey(args.currentTime)
-          ? "Task from chat is due today. Do not let it hide behind habit noise."
-          : "Task added from chat. Keep it visible so it does not disappear into the feed.",
+          ? `Due today${pendingTask.time ? ` at ${pendingTask.time}` : ""}. Added from chat and still pending.`
+          : `Queued for ${formatWorkoutDate(taskDate.getTime())}${pendingTask.time ? ` at ${pendingTask.time}` : ""}. Added from chat and still pending.`,
       meta: [
         formatWorkoutDate(taskDate.getTime()),
-        pendingTask.time ?? "No time set",
+        taskTime,
         pendingTask.source,
       ],
       actionLabel: "Open chat",
@@ -1583,9 +1667,9 @@ function buildHighlightAlertCards(args: {
         pendingTask.date === toDateKey(args.currentTime) ? "Today" : "Queued",
       task: pendingTask,
     });
-  }
+  });
 
-  return cards.slice(0, 4);
+  return cards;
 }
 
 function SummaryStatusCard({
@@ -1641,16 +1725,17 @@ function SummaryStatusCard({
   );
 
   const triggerLoopShift = useCallback(
-    (direction: 1 | -1) => {
+    (swipeDirection: 1 | -1) => {
       if (cardCount <= 1 || isExiting) return;
       setIsExiting(true);
-      setExitDirection(direction);
+      setExitDirection(swipeDirection);
       wheelAccumulatorRef.current = 0;
       if (exitTimerRef.current !== null) {
         window.clearTimeout(exitTimerRef.current);
       }
       exitTimerRef.current = window.setTimeout(() => {
-        setFrontCardIndex((current) => current + direction);
+        // Always rotate forward so the top card moves to the very back.
+        setFrontCardIndex((current) => current + 1);
         setDragOffset(0);
         setIsDragging(false);
         setIsExiting(false);
@@ -2409,17 +2494,83 @@ function ChatTab({
   onQuickMiss: () => Promise<void>;
   onUpgrade: () => Promise<void>;
 }) {
-  const sortedMessages = sortByTimestamp(messages);
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState<{
+    _id: string;
+    role: "user";
+    content: string;
+    timestamp: number;
+  } | null>(null);
+  const [showFallbackHint, setShowFallbackHint] = useState(false);
+  const renderedMessages = useMemo(() => {
+    const base = sortByTimestamp(messages).map((message) => ({
+      _id: String(message._id),
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp,
+    }));
+
+    if (!optimisticUserMessage) {
+      return base;
+    }
+
+    const alreadyPersisted = base.some(
+      (message) =>
+        message.role === "user" &&
+        message.content === optimisticUserMessage.content &&
+        Math.abs(message.timestamp - optimisticUserMessage.timestamp) < 120000,
+    );
+
+    const shouldShowOptimistic = !alreadyPersisted;
+    if (!shouldShowOptimistic) {
+      return base;
+    }
+
+    return sortByTimestamp([...base, optimisticUserMessage]);
+  }, [messages, optimisticUserMessage]);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const limitReached = budgetStatus?.limitReached ?? false;
-  const lastMessageId = sortedMessages[sortedMessages.length - 1]?._id ?? null;
+  const lastMessageId =
+    renderedMessages[renderedMessages.length - 1]?._id ?? null;
 
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop =
         scrollContainerRef.current.scrollHeight;
     }
-  }, [lastMessageId, sortedMessages.length]);
+  }, [lastMessageId, renderedMessages.length, sending]);
+
+  useEffect(() => {
+    const hintTimerId = sending
+      ? window.setTimeout(() => {
+          setShowFallbackHint(true);
+        }, 4500)
+      : window.setTimeout(() => {
+          setShowFallbackHint(false);
+        }, 0);
+
+    return () => {
+      window.clearTimeout(hintTimerId);
+    };
+  }, [sending]);
+
+  const submitMessage = useCallback(() => {
+    const content = input.trim();
+    if (!content || sending || limitReached) {
+      return;
+    }
+
+    const optimisticTimestamp = Date.now();
+    setOptimisticUserMessage({
+      _id: `optimistic-${optimisticTimestamp}`,
+      role: "user",
+      content,
+      timestamp: optimisticTimestamp,
+    });
+    setInput("");
+    void onSend(content).finally(() => {
+      setOptimisticUserMessage(null);
+    });
+  }, [input, limitReached, onSend, sending, setInput]);
 
   const quickActions = primarySnapshot
     ? primarySnapshot.state === "missed"
@@ -2509,6 +2660,45 @@ function ChatTab({
         },
       ];
 
+  const markdownComponents = useMemo(
+    () => ({
+      p: ({ children }: { children?: React.ReactNode }) => (
+        <p className="leading-7">{children}</p>
+      ),
+      ul: ({ children }: { children?: React.ReactNode }) => (
+        <ul className="my-2 list-disc pl-5">{children}</ul>
+      ),
+      ol: ({ children }: { children?: React.ReactNode }) => (
+        <ol className="my-2 list-decimal pl-5">{children}</ol>
+      ),
+      li: ({ children }: { children?: React.ReactNode }) => (
+        <li className="mb-1">{children}</li>
+      ),
+      strong: ({ children }: { children?: React.ReactNode }) => (
+        <strong className="font-black">{children}</strong>
+      ),
+      em: ({ children }: { children?: React.ReactNode }) => (
+        <em className="italic">{children}</em>
+      ),
+      code: ({ children }: { children?: React.ReactNode }) => (
+        <code className="rounded-sm border border-black/20 bg-background/70 px-1 py-0.5 text-[0.9em]">
+          {children}
+        </code>
+      ),
+      pre: ({ children }: { children?: React.ReactNode }) => (
+        <pre className="my-2 overflow-x-auto border border-black/20 bg-background/70 p-3 text-[0.95em]">
+          {children}
+        </pre>
+      ),
+      blockquote: ({ children }: { children?: React.ReactNode }) => (
+        <blockquote className="my-2 border-l-4 border-black/40 pl-3 text-foreground/90">
+          {children}
+        </blockquote>
+      ),
+    }),
+    [],
+  );
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -2570,14 +2760,14 @@ function ChatTab({
             ref={scrollContainerRef}
             className="max-h-128 overflow-y-auto border-2 border-black bg-background px-3 py-2 sm:px-4"
           >
-            {sortedMessages.length === 0 ? (
+            {renderedMessages.length === 0 ? (
               <div className="border-b border-dashed border-black py-4 text-sm leading-relaxed text-muted-foreground">
                 No messages yet. Start clean, explain the miss, or force a plan
                 before today drifts.
               </div>
             ) : null}
 
-            {sortedMessages.map((message) => (
+            {renderedMessages.map((message) => (
               <div
                 key={message._id}
                 className={`border-b border-dashed border-black py-3 text-sm ${
@@ -2605,18 +2795,48 @@ function ChatTab({
                       {formatMessageTime(message.timestamp)}
                     </span>
                   </div>
-                  <p
-                    className={`leading-7 ${
+                  <div
+                    className={
                       message.role === "ai"
                         ? "font-bold text-foreground"
                         : "text-foreground"
-                    }`}
+                    }
                   >
-                    {message.content}
-                  </p>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm, remarkBreaks]}
+                      components={markdownComponents}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               </div>
             ))}
+
+            {sending ? (
+              <div className="border-b border-dashed border-black py-3 text-sm">
+                <div className="mr-0 border-2 border-black bg-secondary px-4 py-4 shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)] sm:mr-6">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                    <span className="border border-black bg-black px-2 py-1 text-white">
+                      Coach
+                    </span>
+                    <span className="font-bold">Pending</span>
+                  </div>
+                  <div
+                    className="flex items-center gap-2"
+                    aria-live="polite"
+                    aria-label="Waiting for coach reply"
+                  >
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-foreground/80 [animation-delay:0ms]" />
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-foreground/80 [animation-delay:140ms]" />
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-foreground/80 [animation-delay:280ms]" />
+                  </div>
+                  {showFallbackHint ? (
+                    <p className="mt-3 text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground"></p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="border-t-2 border-black/10 pt-1">
@@ -2646,9 +2866,7 @@ function ChatTab({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  if (!sending && input.trim() && !limitReached) {
-                    void onSend(input);
-                  }
+                  submitMessage();
                 }
               }}
               className="min-h-24"
@@ -2666,9 +2884,9 @@ function ChatTab({
             <Button
               type="button"
               disabled={sending || !input.trim() || limitReached}
-              onClick={() => onSend(input)}
+              onClick={submitMessage}
             >
-              {sending ? "Sending..." : "Send"}
+              {sending ? "Working..." : "Send"}
             </Button>
           </div>
         </CardContent>
@@ -2682,6 +2900,7 @@ function StatsTab({
   checkIns,
   habitSkips,
   reminderRuns,
+  reminders,
   workoutLogs,
   latestReport,
   referenceDate,
@@ -2691,11 +2910,16 @@ function StatsTab({
   checkIns: CheckInDoc[];
   habitSkips: HabitSkipDoc[];
   reminderRuns: ReminderRunDoc[];
+  reminders: ReminderDoc[];
   workoutLogs: WorkoutLogDoc[];
   latestReport: WeeklyReportDoc | null;
   referenceDate: Date;
   onOpenDetail: (habit: HabitDoc) => void;
 }) {
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyRange, setHistoryRange] = useState<StatsRangePreset>("90d");
+  const [historyHabitId, setHistoryHabitId] = useState<string>("all");
+
   const weekDays = getWeekDays(referenceDate);
   const weekStart = weekDays[0]?.date ?? referenceDate;
   const weekEnd = weekDays[6]?.date ?? referenceDate;
@@ -2711,7 +2935,189 @@ function StatsTab({
   const weeklyReminderRuns = reminderRuns.filter((entry) =>
     weekDateKeys.has(entry.date),
   );
+  const weeklyReminders = reminders.filter((entry) =>
+    weekDateKeys.has(entry.date),
+  );
   const activeHabits = habits.filter((habit) => habit.isActive);
+  const historyRangeStartTs = useMemo(
+    () => getStatsRangeStartTimestamp(historyRange, referenceDate),
+    [historyRange, referenceDate],
+  );
+  const historyHabits = useMemo(
+    () =>
+      historyHabitId === "all"
+        ? activeHabits
+        : activeHabits.filter((habit) => habit._id === historyHabitId),
+    [activeHabits, historyHabitId],
+  );
+  const habitStartById = useMemo(() => {
+    const map = new Map<string, number>();
+    habits.forEach((habit) => {
+      const start = new Date(habit.createdAt);
+      start.setHours(0, 0, 0, 0);
+      map.set(habit._id, start.getTime());
+    });
+    return map;
+  }, [habits]);
+  const checkInByHabitDate = useMemo(() => {
+    const map = new Map<string, CheckInDoc>();
+    checkIns.forEach((entry) => {
+      const key = `${entry.habitId}:${entry.date}`;
+      const current = map.get(key);
+      if (!current || current.timestamp < entry.timestamp) {
+        map.set(key, entry);
+      }
+    });
+    return map;
+  }, [checkIns]);
+  const skipByHabitDate = useMemo(() => {
+    const set = new Set<string>();
+    habitSkips.forEach((entry) => {
+      set.add(`${entry.habitId}:${entry.date}`);
+    });
+    return set;
+  }, [habitSkips]);
+  const reminderRunByHabitDate = useMemo(() => {
+    const map = new Map<string, ReminderRunDoc["state"]>();
+    reminderRuns.forEach((entry) => {
+      map.set(`${entry.habitId}:${entry.date}`, entry.state);
+    });
+    return map;
+  }, [reminderRuns]);
+  const historyWeeksCount = useMemo(() => {
+    if (historyRange === "30d") return 5;
+    if (historyRange === "90d") return 13;
+    if (historyRange === "365d") return 52;
+    if (historyHabits.length === 0) return 8;
+
+    let earliestStart = historyHabits[0]?.createdAt ?? Date.now();
+    historyHabits.forEach((habit) => {
+      if (habit.createdAt < earliestStart) {
+        earliestStart = habit.createdAt;
+      }
+    });
+
+    const earliestWeekStart = getStartOfWeek(new Date(earliestStart));
+    const currentWeekStart = getStartOfWeek(referenceDate);
+    const dayDiff = Math.floor(
+      (currentWeekStart.getTime() - earliestWeekStart.getTime()) /
+        (24 * 60 * 60 * 1000),
+    );
+    const weeks = Math.floor(dayDiff / 7) + 1;
+    return Math.max(8, Math.min(weeks, 104));
+  }, [historyHabits, historyRange, referenceDate]);
+  const historyWeeks = useMemo(() => {
+    const todayDateKey = toDateKey(referenceDate);
+    const currentWeekStart = getStartOfWeek(referenceDate);
+
+    const resolveHistoryDayStatus = (date: Date, dayKey: string) => {
+      const dateKey = toDateKey(date);
+      const dateTs = date.getTime();
+      const isFuture = dateKey > todayDateKey;
+      if (isFuture) return "future" as const;
+      if (
+        historyRangeStartTs !== null &&
+        date.getTime() < historyRangeStartTs
+      ) {
+        return "rest" as const;
+      }
+
+      const scheduledHabits = historyHabits.filter((habit) => {
+        const startTs = habitStartById.get(habit._id) ?? 0;
+        if (dateTs < startTs) {
+          return false;
+        }
+        return habit.targetDays.includes(dayKey);
+      });
+
+      const hasStartedHabitInScope = historyHabits.some((habit) => {
+        const startTs = habitStartById.get(habit._id) ?? 0;
+        return dateTs >= startTs;
+      });
+
+      if (!hasStartedHabitInScope) {
+        return "inactive" as const;
+      }
+
+      if (scheduledHabits.length === 0) {
+        return "rest" as const;
+      }
+
+      let hasMiss = false;
+      let hasPending = false;
+      let completed = 0;
+      let skipped = 0;
+
+      scheduledHabits.forEach((habit) => {
+        const key = `${habit._id}:${dateKey}`;
+        const checkIn = checkInByHabitDate.get(key);
+        if (checkIn?.status === "missed") {
+          hasMiss = true;
+          return;
+        }
+        if (checkIn?.status === "completed" || checkIn?.status === "bonus") {
+          completed += 1;
+          return;
+        }
+
+        const isSkipped =
+          skipByHabitDate.has(key) ||
+          reminderRunByHabitDate.get(key) === "skipped";
+        if (isSkipped) {
+          skipped += 1;
+          return;
+        }
+
+        hasPending = true;
+      });
+
+      if (hasMiss) return "missed" as const;
+      if (hasPending) {
+        return dateKey === todayDateKey
+          ? ("pending" as const)
+          : ("missed" as const);
+      }
+      if (completed > 0) return "perfect" as const;
+      if (skipped === scheduledHabits.length && scheduledHabits.length > 0) {
+        return "skipped" as const;
+      }
+      return "rest" as const;
+    };
+
+    return Array.from({ length: historyWeeksCount }, (_, index) => {
+      const weekOffset = historyWeeksCount - index - 1;
+      const weekStartDate = new Date(currentWeekStart);
+      weekStartDate.setDate(currentWeekStart.getDate() - weekOffset * 7);
+      weekStartDate.setHours(0, 0, 0, 0);
+
+      const days = DAYS.map((day, dayIndex) => {
+        const date = new Date(weekStartDate);
+        date.setDate(weekStartDate.getDate() + dayIndex);
+        const dateKey = toDateKey(date);
+
+        return {
+          date,
+          dateKey,
+          dayLabel: day.label,
+          status: resolveHistoryDayStatus(date, day.key),
+        };
+      });
+
+      return {
+        weekStartLabel: formatWorkoutDate(weekStartDate.getTime()),
+        days,
+      };
+    });
+  }, [
+    checkInByHabitDate,
+    habitStartById,
+    historyHabits,
+    historyRangeStartTs,
+    historyWeeksCount,
+    referenceDate,
+    reminderRunByHabitDate,
+    skipByHabitDate,
+  ]);
   const bestStreak = Math.max(
     0,
     ...activeHabits.map((habit) => habit.bestStreak),
@@ -2808,6 +3214,7 @@ function StatsTab({
         weeklyCheckIns,
         weeklySkips,
         weeklyReminderRuns,
+        weeklyReminders,
       ).state;
       if (cellState === "missed") hasMiss = true;
       else if (cellState === "scheduled") hasPending = true;
@@ -2838,7 +3245,137 @@ function StatsTab({
         <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">
           System performance feedback and recent habit logs.
         </p>
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setIsHistoryOpen(true)}
+          >
+            <CalendarDays />
+            Open History
+          </Button>
+        </div>
       </div>
+
+      <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="text-3xl">History Calendar</DialogTitle>
+            <DialogDescription className="text-muted-foreground uppercase tracking-[0.12em]">
+              MTWTFSS snapshot for{" "}
+              {formatStatsRangeLabel(historyRange).toLowerCase()}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { key: "30d", label: "30D" },
+                    { key: "90d", label: "90D" },
+                    { key: "365d", label: "1Y" },
+                    { key: "all", label: "ALL" },
+                  ] as const
+                ).map((preset) => (
+                  <Button
+                    key={preset.key}
+                    type="button"
+                    size="sm"
+                    variant={
+                      historyRange === preset.key ? "default" : "outline"
+                    }
+                    onClick={() => setHistoryRange(preset.key)}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="stats-history-modal-habit">Habit filter</Label>
+                <select
+                  id="stats-history-modal-habit"
+                  value={historyHabitId}
+                  onChange={(event) => setHistoryHabitId(event.target.value)}
+                  className="h-9 min-w-52 border-2 border-black bg-background px-2 text-xs uppercase tracking-[0.08em]"
+                >
+                  <option value="all">All active habits</option>
+                  {activeHabits.map((habit) => (
+                    <option key={habit._id} value={habit._id}>
+                      {habit.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-[0.18em]">
+              <span className="border-2 border-black bg-background px-2 py-1">
+                Black: done
+              </span>
+              <span className="border-2 border-black bg-background px-2 py-1 text-[#DF3B23]">
+                Red: miss
+              </span>
+              <span className="border-2 border-black bg-background px-2 py-1">
+                Outline: live
+              </span>
+              <span className="border-2 border-black bg-background px-2 py-1 text-muted-foreground">
+                Beige: rest/skip
+              </span>
+              <span className="border-2 border-dashed border-black/40 bg-background px-2 py-1 text-muted-foreground">
+                Blank: not started
+              </span>
+            </div>
+
+            <div className="max-h-[58vh] space-y-2 overflow-y-auto pr-1">
+              {historyWeeks.map((week, rowIndex) => (
+                <div
+                  key={`${week.weekStartLabel}-${rowIndex}`}
+                  className="grid grid-cols-[auto_1fr] items-stretch gap-2"
+                >
+                  <div className="flex w-14 items-center justify-center border-2 border-black bg-secondary px-1 text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground">
+                    {week.weekStartLabel}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1.5">
+                    {week.days.map((entry) => {
+                      const style =
+                        entry.status === "missed"
+                          ? "bg-[#DF3B23] text-white border-black"
+                          : entry.status === "perfect"
+                            ? "bg-black text-white border-black"
+                            : entry.status === "pending"
+                              ? "bg-background text-foreground border-[3px] border-black"
+                              : entry.status === "future"
+                                ? "bg-background text-transparent border-dashed border-black/30"
+                                : entry.status === "inactive"
+                                  ? "bg-background text-transparent border-dashed border-black/20 opacity-40"
+                                  : entry.status === "skipped"
+                                    ? "bg-[#F7EFE1] text-[#7B5D3A] border-[#B7925A]"
+                                    : "bg-secondary text-muted-foreground/80 border-black/20";
+
+                      return (
+                        <div
+                          key={entry.dateKey}
+                          title={`${entry.dayLabel} ${entry.dateKey}`}
+                          className={`grid min-h-12 border-2 p-1.5 text-center font-bold uppercase ${style}`}
+                        >
+                          <span className="text-[9px]">
+                            {entry.dayLabel.charAt(0)}
+                          </span>
+                          <span className="mt-auto text-[10px]">
+                            {entry.dateKey.slice(8)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-6 border-b-2 border-black pb-8 pt-4 xl:grid-cols-[0.95fr_1.05fr]">
         <div className="space-y-4">
@@ -3051,6 +3588,7 @@ function StatsTab({
                 weeklyCheckIns={weeklyCheckIns}
                 weeklySkips={weeklySkips}
                 weeklyReminderRuns={weeklyReminderRuns}
+                weeklyReminders={weeklyReminders}
                 referenceDate={referenceDate}
               />
 
@@ -3113,6 +3651,7 @@ function HabitDetailPanel({
   allCheckIns,
   allHabitSkips,
   allReminderRuns,
+  allReminders,
   allWorkoutLogs,
   referenceDate,
   saving,
@@ -3124,6 +3663,7 @@ function HabitDetailPanel({
   allCheckIns: CheckInDoc[];
   allHabitSkips: HabitSkipDoc[];
   allReminderRuns: ReminderRunDoc[];
+  allReminders: ReminderDoc[];
   allWorkoutLogs: WorkoutLogDoc[];
   referenceDate: Date;
   saving: boolean;
@@ -3158,6 +3698,9 @@ function HabitDetailPanel({
     (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
   );
   const weeklyReminderRuns = allReminderRuns.filter(
+    (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
+  );
+  const weeklyReminders = allReminders.filter(
     (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
   );
   const recentLogs = allWorkoutLogs
@@ -3446,6 +3989,7 @@ function HabitDetailPanel({
                 weeklyCheckIns={weeklyCheckIns}
                 weeklySkips={weeklySkips}
                 weeklyReminderRuns={weeklyReminderRuns}
+                weeklyReminders={weeklyReminders}
                 referenceDate={referenceDate}
               />
             </CardContent>
@@ -3867,7 +4411,6 @@ export function DashboardShell() {
   const { theme, toggleTheme } = useTheme();
   const searchParams = useSearchParams();
   const syncAttempted = useRef(false);
-  const seededWelcome = useRef(false);
   const pushSyncAttempted = useRef(false);
   const [now, setNow] = useState(() => new Date());
   const [activeTab, setActiveTab] = useState<AppTab>("home");
@@ -3901,7 +4444,6 @@ export function DashboardShell() {
   const updateHabit = useMutation(api.habits.update);
   const deleteHabit = useMutation(api.habits.remove);
   const createCheckIn = useMutation(api.checkIns.create);
-  const createMessage = useMutation(api.messages.create);
   const sendChatMessage = useAction(api.chatAction.sendMessage);
   const subscribeToNotifications = useMutation(api.notifications.subscribe);
 
@@ -3941,6 +4483,10 @@ export function DashboardShell() {
   );
   const reminderRuns = useQuery(
     api.reminders.listRunsByUser,
+    convexUser ? { userId: convexUser._id } : "skip",
+  );
+  const reminders = useQuery(
+    api.reminders.listByUser,
     convexUser ? { userId: convexUser._id } : "skip",
   );
   const workoutLogs = useQuery(
@@ -4062,33 +4608,6 @@ export function DashboardShell() {
       aiPersonality: ONBOARDING_PERSONALITY,
     });
   }, [clerkTier, convexUser, currentTimezone, isLoaded, syncUser, user]);
-
-  useEffect(() => {
-    if (
-      !convexUser ||
-      convexUser.aiDisabled ||
-      !messages ||
-      messages.length > 0 ||
-      !convexUser.onboardingCompleted ||
-      seededWelcome.current
-    ) {
-      return;
-    }
-
-    seededWelcome.current = true;
-    const upcoming = habits?.find((habit: HabitDoc) =>
-      habit.targetDays.includes(todayKey),
-    );
-    void createMessage({
-      userId: convexUser._id,
-      habitId: upcoming?._id,
-      role: "ai",
-      content: upcoming
-        ? `Morning. ${upcoming.name} is scheduled for ${upcoming.scheduledTime}. I'll be here when you either do it or dodge it.`
-        : "No target habit is scheduled today. Use the day well anyway.",
-      intent: "check_in",
-    });
-  }, [convexUser, createMessage, habits, messages, todayKey]);
 
   useEffect(() => {
     const requestedTab = searchParams.get("tab");
@@ -4214,6 +4733,7 @@ export function DashboardShell() {
     () => reminderRuns ?? [],
     [reminderRuns],
   );
+  const resolvedReminders = useMemo(() => reminders ?? [], [reminders]);
   const resolvedWorkoutLogs = useMemo(() => workoutLogs ?? [], [workoutLogs]);
   const resolvedWeeklyReports = useMemo(
     () => weeklyReports ?? [],
@@ -4331,13 +4851,6 @@ export function DashboardShell() {
       onboardingCompleted: true,
     });
 
-    await createMessage({
-      userId: convexUser._id,
-      habitId,
-      role: "ai",
-      content: `Locked in. ${form.name} is live now. Your reminder is ${form.reminderTime} and your deadline is ${form.checkInDeadline}. Don't make me repeat myself.`,
-      intent: "check_in",
-    });
   }
 
   async function logCheckInStatus(
@@ -4354,10 +4867,7 @@ export function DashboardShell() {
 
     setPendingHabitId(habit._id);
     try {
-      const aiResponse =
-        status === "completed"
-          ? `Logged ${habit.name}. Good. Now do it again on the next scheduled day.`
-          : `Miss recorded for ${habit.name}. That's on you, not the calendar.`;
+      const aiResponse = `[dashboard_quick_${status}]`;
 
       await createCheckIn({
         habitId: habit._id,
@@ -4454,19 +4964,19 @@ export function DashboardShell() {
     if (!content) return;
 
     setChatSending(true);
+    setChatInput("");
     try {
       setChatErrorMessage(null);
       await sendChatMessage({
         content,
         source: "chat_input",
       });
-
-      setChatInput("");
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
           : "Unable to send message right now.";
+      setChatInput(content);
       if (message.includes("FREE_DAILY_MESSAGE_LIMIT_REACHED")) {
         setChatErrorMessage(
           "Daily free chat cap reached. Upgrade to Pro or wait for your local midnight reset.",
@@ -4716,6 +5226,7 @@ export function DashboardShell() {
             checkIns={resolvedAllCheckIns}
             habitSkips={resolvedHabitSkips}
             reminderRuns={resolvedReminderRuns}
+            reminders={resolvedReminders}
             workoutLogs={resolvedWorkoutLogs}
             latestReport={latestWeeklyReport}
             referenceDate={now}
@@ -4754,6 +5265,7 @@ export function DashboardShell() {
         allCheckIns={resolvedAllCheckIns}
         allHabitSkips={resolvedHabitSkips}
         allReminderRuns={resolvedReminderRuns}
+        allReminders={resolvedReminders}
         allWorkoutLogs={resolvedWorkoutLogs}
         referenceDate={now}
         saving={detailSaving}

@@ -3,11 +3,57 @@ import type { Id } from "./_generated/dataModel";
 import {
   internalMutation,
   internalQuery,
+  mutation,
   query,
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 
 type AuthCtx = QueryCtx | MutationCtx;
+
+function roundUsd(value: number) {
+  return Number(value.toFixed(10));
+}
+
+function buildAccumulatedCostMap(
+  rows: Array<{
+    _id: Id<"agentModelRuns">;
+    estimatedCostUsd?: number;
+  }>,
+) {
+  const accumulatedById = new Map<Id<"agentModelRuns">, number>();
+  let running = 0;
+  for (const row of rows) {
+    running += row.estimatedCostUsd ?? 0;
+    accumulatedById.set(row._id, roundUsd(running));
+  }
+  return accumulatedById;
+}
+
+async function hydrateAccumulatedTotals<
+  TRow extends {
+    _id: Id<"agentModelRuns">;
+    accumulatedTotalCostUsd?: number;
+  },
+>(ctx: QueryCtx, userId: Id<"users">, rows: TRow[]) {
+  const needsHydration = rows.some(
+    (row) => row.accumulatedTotalCostUsd === undefined,
+  );
+  if (!needsHydration) {
+    return rows;
+  }
+
+  const allRowsAsc = await ctx.db
+    .query("agentModelRuns")
+    .withIndex("by_user_createdAt", (q) => q.eq("userId", userId))
+    .collect();
+  const accumulatedById = buildAccumulatedCostMap(allRowsAsc);
+
+  return rows.map((row) => ({
+    ...row,
+    accumulatedTotalCostUsd:
+      row.accumulatedTotalCostUsd ?? accumulatedById.get(row._id) ?? 0,
+  }));
+}
 
 async function requireIdentity(ctx: AuthCtx) {
   const identity = await ctx.auth.getUserIdentity();
@@ -49,6 +95,10 @@ export const logModelRun = internalMutation({
     finalProvider: v.string(),
     finalModel: v.string(),
     fallbackDepth: v.number(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    estimatedCostUsd: v.optional(v.number()),
+    accumulatedTotalCostUsd: v.optional(v.number()),
     attempts: v.array(
       v.object({
         provider: v.string(),
@@ -56,12 +106,39 @@ export const logModelRun = internalMutation({
         attemptOrder: v.number(),
         status: v.union(v.literal("success"), v.literal("failed")),
         errorSummary: v.optional(v.string()),
+        inputTokens: v.optional(v.number()),
+        outputTokens: v.optional(v.number()),
+        estimatedCostUsd: v.optional(v.number()),
       }),
     ),
     createdAt: v.number(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("agentModelRuns", args);
+    const currentCost = args.estimatedCostUsd ?? 0;
+    const latestRun = await ctx.db
+      .query("agentModelRuns")
+      .withIndex("by_user_createdAt", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .first();
+
+    let previousAccumulated = latestRun?.accumulatedTotalCostUsd;
+    if (previousAccumulated === undefined) {
+      const rows = await ctx.db
+        .query("agentModelRuns")
+        .withIndex("by_user_createdAt", (q) => q.eq("userId", args.userId))
+        .collect();
+      previousAccumulated = rows.reduce(
+        (sum, row) => sum + (row.estimatedCostUsd ?? 0),
+        0,
+      );
+    }
+
+    return await ctx.db.insert("agentModelRuns", {
+      ...args,
+      accumulatedTotalCostUsd: roundUsd(
+        (previousAccumulated ?? 0) + currentCost,
+      ),
+    });
   },
 });
 
@@ -77,7 +154,7 @@ export const listRecentByUser = internalQuery({
       .order("desc")
       .take(Math.min(Math.max(args.limit ?? 20, 1), 100));
 
-    return rows;
+    return await hydrateAccumulatedTotals(ctx, args.userId, rows);
   },
 });
 
@@ -100,12 +177,13 @@ export const listMyRecent = query({
       .withIndex("by_user_createdAt", (q) => q.eq("userId", user._id))
       .order("desc")
       .take(Math.min(Math.max(args.limit ?? 20, 1), 100));
+    const hydratedRows = await hydrateAccumulatedTotals(ctx, user._id, rows);
 
     if (!args.source) {
-      return rows;
+      return hydratedRows;
     }
 
-    return rows.filter((row) => row.source === args.source);
+    return hydratedRows.filter((row) => row.source === args.source);
   },
 });
 
@@ -128,10 +206,11 @@ export const listMyRecentExpanded = query({
       .withIndex("by_user_createdAt", (q) => q.eq("userId", user._id))
       .order("desc")
       .take(Math.min(Math.max(args.limit ?? 20, 1), 100));
+    const hydratedRows = await hydrateAccumulatedTotals(ctx, user._id, rows);
 
     const filtered = args.source
-      ? rows.filter((row) => row.source === args.source)
-      : rows;
+      ? hydratedRows.filter((row) => row.source === args.source)
+      : hydratedRows;
 
     return await Promise.all(
       filtered.map(async (row) => {
@@ -178,12 +257,14 @@ export const listMyRecentChatReplies = query({
       .withIndex("by_user_createdAt", (q) => q.eq("userId", user._id))
       .order("desc")
       .take(100);
+    const hydratedRows = await hydrateAccumulatedTotals(ctx, user._id, rows);
 
-    const replyRows = rows
+    const replyRows = hydratedRows
       .filter(
         (row) =>
           row.source === "chat" &&
-          (row.purpose === "coach_reply" || row.purpose === "operational_reply"),
+          (row.purpose === "coach_reply" ||
+            row.purpose === "operational_reply"),
       )
       .slice(0, Math.min(Math.max(args.limit ?? 10, 1), 50));
 
@@ -195,7 +276,7 @@ export const listMyRecentChatReplies = query({
           row.aiMessageId ? ctx.db.get(row.aiMessageId) : Promise.resolve(null),
         ]);
 
-        const extractionRows = rows
+        const extractionRows = hydratedRows
           .filter(
             (candidate) =>
               candidate.source === "chat" &&
@@ -224,8 +305,7 @@ export const listMyRecentChatReplies = query({
           attempts: row.attempts,
           userMessageContent:
             row.userMessageContent ?? userMessage?.content ?? null,
-          aiMessageContent:
-            row.aiMessageContent ?? aiMessage?.content ?? null,
+          aiMessageContent: row.aiMessageContent ?? aiMessage?.content ?? null,
           userMessage: userMessage
             ? {
                 id: userMessage._id,
@@ -246,6 +326,34 @@ export const listMyRecentChatReplies = query({
         };
       }),
     );
+  },
+});
+
+export const backfillMyAccumulatedTotalCost = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    const rows = await ctx.db
+      .query("agentModelRuns")
+      .withIndex("by_user_createdAt", (q) => q.eq("userId", user._id))
+      .collect();
+
+    let running = 0;
+    let updated = 0;
+    for (const row of rows) {
+      running += row.estimatedCostUsd ?? 0;
+      const accumulatedTotalCostUsd = roundUsd(running);
+      if (row.accumulatedTotalCostUsd !== accumulatedTotalCostUsd) {
+        await ctx.db.patch(row._id, { accumulatedTotalCostUsd });
+        updated += 1;
+      }
+    }
+
+    return {
+      updated,
+      totalRuns: rows.length,
+      totalCostUsd: roundUsd(running),
+    };
   },
 });
 

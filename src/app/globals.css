@@ -143,11 +143,13 @@
 
 @layer components {
   .brutal-card {
-    @apply border-2 border-black bg-card text-card-foreground shadow-[4px_4px_0px_0px_rgba(26,24,20,1)];
+    @apply border-2 border-border bg-card text-card-foreground;
+    box-shadow: var(--shadow-brutal);
   }
 
   .brutal-card-lg {
-    @apply border-2 border-black bg-card text-card-foreground shadow-[8px_8px_0px_0px_rgba(26,24,20,1)];
+    @apply border-2 border-border bg-card text-card-foreground;
+    box-shadow: var(--shadow-brutal-lg);
   }
 
   .brutal-meta {
@@ -159,10 +161,10 @@
   }
 
   .brutal-alert {
-    @apply border-2 border-black bg-[#DF3B23] text-white;
+    @apply border-2 border-border bg-[#DF3B23] text-white;
   }
 
   .brutal-grid {
-    @apply divide-x-2 divide-black border-2 border-black;
+    @apply divide-x-2 divide-border border-2 border-border;
   }
 }
