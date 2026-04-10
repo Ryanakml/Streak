@@ -17,6 +17,14 @@ function getDateKey(date: Date, timezone: string) {
   return formatInTimeZone(date, timezone, "yyyy-MM-dd");
 }
 
+function getTimeKey(date: Date, timezone: string) {
+  return formatInTimeZone(date, timezone, "HH:mm");
+}
+
+function getLocalDateTimeLabel(date: Date, timezone: string) {
+  return formatInTimeZone(date, timezone, "yyyy-MM-dd HH:mm");
+}
+
 function getTodayKey(date: Date, timezone: string) {
   return formatInTimeZone(date, timezone, "EEE").toLowerCase().slice(0, 3);
 }
@@ -145,6 +153,7 @@ export const getChatContext = internalQuery({
     const timezone = user.timezone ?? "UTC";
     const now = new Date(args.now);
     const date = getDateKey(now, timezone);
+    const nowLocalTime = getTimeKey(now, timezone);
     const date7dStart = shiftDateKey(now, timezone, -6);
     const date30dStart = shiftDateKey(now, timezone, -29);
     const todayCheckIns = await ctx.db
@@ -217,6 +226,14 @@ export const getChatContext = internalQuery({
     return {
       user,
       date,
+      timezone,
+      nowTs: args.now,
+      nowIso: now.toISOString(),
+      nowLocalTime,
+      nowLocalDateTime: getLocalDateTimeLabel(now, timezone),
+      minutesIntoDay:
+        Number.parseInt(nowLocalTime.slice(0, 2), 10) * 60 +
+        Number.parseInt(nowLocalTime.slice(3, 5), 10),
       todayDayKey: todayKey,
       activeHabits,
       todayHabits: activeHabits.filter((habit) =>
@@ -257,17 +274,37 @@ export const storeMessage = internalMutation({
   },
 });
 
+export const getStoredMessage = internalQuery({
+  args: {
+    id: v.id("messages"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id);
+  },
+});
+
 export const updateStoredMessage = internalMutation({
   args: {
     id: v.id("messages"),
     habitId: v.optional(v.id("habits")),
     intent: v.optional(v.string()),
+    content: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, {
-      habitId: args.habitId,
-      intent: args.intent,
-    });
+    const patch: Record<string, unknown> = {};
+    if (args.habitId !== undefined) {
+      patch.habitId = args.habitId;
+    }
+    if (args.intent !== undefined) {
+      patch.intent = args.intent;
+    }
+    if (args.content !== undefined) {
+      patch.content = args.content;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(args.id, patch);
+    }
     return await ctx.db.get(args.id);
   },
 });

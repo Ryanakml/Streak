@@ -2,6 +2,7 @@ import { action, internalQuery, mutation, query } from "./_generated/server";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { fromZonedTime } from "date-fns-tz";
 import { internal } from "./_generated/api";
 
 const PHASE1_SEED_PREFIX = "[Seed P1]";
@@ -9,6 +10,7 @@ const PHASE2_SEED_PREFIX = "[Seed P2]";
 const PHASE3_SEED_PREFIX = "[Seed P3]";
 const PHASE4_SEED_PREFIX = "[Seed P4]";
 const PHASE5_SEED_PREFIX = "[Seed P5]";
+const PHASE6_SEED_PREFIX = "[Seed P6]";
 
 function dayKeyFromDateKey(dateKey: string) {
   const date = new Date(`${dateKey}T12:00:00.000Z`);
@@ -26,6 +28,14 @@ function shiftDateKey(dateKey: string, days: number) {
 
 function toTimestamp(dateKey: string, time: string) {
   return new Date(`${dateKey}T${time}:00.000Z`).getTime();
+}
+
+function toTimestampInTimezone(
+  dateKey: string,
+  time: string,
+  timezone: string,
+) {
+  return fromZonedTime(`${dateKey}T${time}:00`, timezone).getTime();
 }
 
 async function deleteSeedData(
@@ -164,6 +174,748 @@ async function deleteSeedData(
   }
 }
 
+export const resetAgentEvaluationWorkspace = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    confirmation: v.literal("phase6-agent-eval-reset"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const cleared = await clearUserWorkspace(ctx, user._id);
+
+    return {
+      userId: user._id,
+      cleared,
+    };
+  },
+});
+
+export const seedMinimalGymReminderSmoke = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    today: v.string(),
+    confirmation: v.literal("phase6-reminder-smoke"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    await clearUserWorkspace(ctx, user._id);
+
+    const now = Date.now();
+    const yesterday = shiftDateKey(args.today, -1);
+    const twoDaysAgo = shiftDateKey(args.today, -2);
+    const threeDaysAgo = shiftDateKey(args.today, -3);
+    const todayDayKey = dayKeyFromDateKey(args.today);
+
+    const gymHabitId = await ctx.db.insert("habits", {
+      userId: user._id,
+      name: "[Smoke] Gym",
+      targetDays: [todayDayKey],
+      scheduledTime: "18:30",
+      reminderTime: "18:00",
+      checkInDeadline: "21:00",
+      rules: "Lift or cardio for at least 30 minutes.",
+      motivation: "No excuses. Show up.",
+      currentStreak: 0,
+      bestStreak: 3,
+      isActive: true,
+      createdAt: now,
+    });
+
+    for (const seededCheckIn of [
+      {
+        date: threeDaysAgo,
+        timestamp: toTimestamp(threeDaysAgo, "21:05"),
+      },
+      {
+        date: twoDaysAgo,
+        timestamp: toTimestamp(twoDaysAgo, "21:10"),
+      },
+      {
+        date: yesterday,
+        timestamp: toTimestamp(yesterday, "21:15"),
+      },
+    ]) {
+      await ctx.db.insert("checkIns", {
+        habitId: gymHabitId,
+        userId: user._id,
+        date: seededCheckIn.date,
+        status: "missed",
+        source: "chat",
+        userReason: "capek atau malas",
+        conversationSummary: "Seeded repeated gym miss",
+        aiResponse: "Seed miss",
+        timestamp: seededCheckIn.timestamp,
+      });
+    }
+
+    const reminderRunId = await ctx.db.insert("reminderRuns", {
+      userId: user._id,
+      habitId: gymHabitId,
+      date: args.today,
+      state: "scheduled",
+      userResponded: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const reminderIds = await Promise.all(
+      [
+        {
+          type: "pre_workout" as const,
+          scheduledFor: now - 20 * 60 * 1000,
+        },
+        {
+          type: "check_in" as const,
+          scheduledFor: now - 10 * 60 * 1000,
+        },
+        {
+          type: "late_follow_up" as const,
+          scheduledFor: now - 5 * 60 * 1000,
+        },
+      ].map((reminder) =>
+        ctx.db.insert("reminders", {
+          habitId: gymHabitId,
+          userId: user._id,
+          date: args.today,
+          scheduledFor: reminder.scheduledFor,
+          type: reminder.type,
+          sent: false,
+        }),
+      ),
+    );
+
+    return {
+      userId: user._id,
+      userEmail: user.email,
+      today: args.today,
+      habit: {
+        id: gymHabitId,
+        name: "[Smoke] Gym",
+      },
+      reminderRunId,
+      reminderIds,
+      seededCheckIns: [
+        { date: threeDaysAgo },
+        { date: twoDaysAgo },
+        { date: yesterday },
+      ],
+    };
+  },
+});
+
+export const seedPhase6ReminderMatrixCase = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    today: v.string(),
+    scenarioId: v.string(),
+    resetExisting: v.optional(v.boolean()),
+    confirmation: v.literal("phase6-reminder-matrix"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    await clearUserWorkspace(ctx, user._id);
+
+    const timezone = user.timezone ?? "UTC";
+    const now = Date.now();
+    const yesterday = shiftDateKey(args.today, -1);
+    const twoDaysAgo = shiftDateKey(args.today, -2);
+    const threeDaysAgo = shiftDateKey(args.today, -3);
+    const todayDayKey = dayKeyFromDateKey(args.today);
+    const habitName = `${PHASE6_SEED_PREFIX} ${args.scenarioId} Gym`;
+
+    const habitId = await ctx.db.insert("habits", {
+      userId: user._id,
+      name: habitName,
+      targetDays: [todayDayKey],
+      scheduledTime: "18:30",
+      reminderTime: "18:00",
+      checkInDeadline: "21:00",
+      rules: "Show up and finish one real session.",
+      motivation: "You said you wanted brutal accountability. Here it is.",
+      currentStreak: 0,
+      bestStreak: 4,
+      isActive: true,
+      createdAt: now,
+    });
+
+    for (const seededCheckIn of [
+      {
+        date: threeDaysAgo,
+        timestamp: toTimestampInTimezone(threeDaysAgo, "21:05", timezone),
+      },
+      {
+        date: twoDaysAgo,
+        timestamp: toTimestampInTimezone(twoDaysAgo, "21:10", timezone),
+      },
+      {
+        date: yesterday,
+        timestamp: toTimestampInTimezone(yesterday, "21:15", timezone),
+      },
+    ]) {
+      await ctx.db.insert("checkIns", {
+        habitId,
+        userId: user._id,
+        date: seededCheckIn.date,
+        status: "missed",
+        source: "chat",
+        userReason: "malas lagi",
+        conversationSummary: "Seeded repeated miss for reminder matrix",
+        aiResponse: "Seed miss",
+        timestamp: seededCheckIn.timestamp,
+      });
+    }
+
+    const reminderRunId = await ctx.db.insert("reminderRuns", {
+      userId: user._id,
+      habitId,
+      date: args.today,
+      state: "scheduled",
+      userResponded: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const reminders = await Promise.all(
+      [
+        {
+          type: "pre_workout" as const,
+          scheduledFor: toTimestampInTimezone(args.today, "18:00", timezone),
+        },
+        {
+          type: "check_in" as const,
+          scheduledFor: toTimestampInTimezone(args.today, "18:30", timezone),
+        },
+        {
+          type: "late_follow_up" as const,
+          scheduledFor: toTimestampInTimezone(args.today, "21:05", timezone),
+        },
+      ].map((entry) =>
+        ctx.db.insert("reminders", {
+          habitId,
+          userId: user._id,
+          date: args.today,
+          scheduledFor: entry.scheduledFor,
+          type: entry.type,
+          sent: false,
+        }),
+      ),
+    );
+
+    return {
+      userId: user._id,
+      userEmail: user.email,
+      today: args.today,
+      scenarioId: args.scenarioId,
+      habit: {
+        id: habitId,
+        name: habitName,
+      },
+      reminderRunId,
+      reminderIds: reminders,
+    };
+  },
+});
+
+export const recordPhase6ReminderResponse = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    habitName: v.string(),
+    date: v.string(),
+    stage: v.union(v.literal("post"), v.literal("due")),
+    responseKind: v.union(v.literal("ack"), v.literal("excuse")),
+    content: v.optional(v.string()),
+    confirmation: v.literal("phase6-reminder-matrix"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const habit = await findUserHabitByName(ctx, user._id, args.habitName);
+    if (!habit) {
+      throw new Error("Habit not found for reminder matrix response");
+    }
+
+    const reminders = ((await ctx.db
+      .query("reminders")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect()) as Doc<"reminders">[])
+      .filter((entry) => entry.habitId === habit._id && entry.date === args.date)
+      .sort((left, right) => left.scheduledFor - right.scheduledFor);
+    const window = getReminderStageWindow({
+      reminders,
+      stage: args.stage,
+    });
+    const timestamp = Math.min(
+      window.start + 60 * 1000,
+      window.end,
+    );
+    const content =
+      args.content ??
+      (args.responseKind === "ack"
+        ? `gue bakal beresin ${habit.name}`
+        : `gue masih males ${habit.name} hari ini`);
+
+    const messageId = await ctx.db.insert("messages", {
+      userId: user._id,
+      habitId: habit._id,
+      role: "user",
+      content,
+      intent: args.responseKind === "ack" ? "question" : "excuse",
+      timestamp,
+    });
+
+    await upsertSeedReminderRunState({
+      ctx,
+      userId: user._id,
+      habitId: habit._id,
+      date: args.date,
+      state:
+        args.responseKind === "ack"
+          ? "user_acknowledged"
+          : "user_hesitant",
+      now: timestamp,
+      userResponded: true,
+      responseIntent: args.responseKind === "ack" ? "question" : "excuse",
+      responseSummary: content,
+    });
+
+    return {
+      messageId,
+      habitId: habit._id,
+      habitName: habit.name,
+      timestamp,
+      responseKind: args.responseKind,
+    };
+  },
+});
+
+export const recordPhase6ReminderCheckIn = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    habitName: v.string(),
+    date: v.string(),
+    stage: v.union(
+      v.literal("post"),
+      v.literal("due"),
+      v.literal("deadline"),
+    ),
+    status: v.union(v.literal("completed"), v.literal("bonus")),
+    confirmation: v.literal("phase6-reminder-matrix"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const habit = await findUserHabitByName(ctx, user._id, args.habitName);
+    if (!habit) {
+      throw new Error("Habit not found for reminder matrix completion");
+    }
+
+    const existingCheckIns = ((await ctx.db
+      .query("checkIns")
+      .withIndex("by_user_date", (q) =>
+        q.eq("userId", user._id).eq("date", args.date),
+      )
+      .collect()) as Doc<"checkIns">[]).filter(
+      (entry) => entry.habitId === habit._id,
+    );
+    if (existingCheckIns.length > 0) {
+      return {
+        status: "no_op",
+        checkInId: existingCheckIns[0]._id,
+      };
+    }
+
+    const reminders = ((await ctx.db
+      .query("reminders")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect()) as Doc<"reminders">[])
+      .filter((entry) => entry.habitId === habit._id && entry.date === args.date)
+      .sort((left, right) => left.scheduledFor - right.scheduledFor);
+    const window = getReminderStageWindow({
+      reminders,
+      stage: args.stage,
+    });
+    const timestamp = Math.min(
+      window.start + 2 * 60 * 1000,
+      window.end,
+    );
+    const checkInId = await ctx.db.insert("checkIns", {
+      habitId: habit._id,
+      userId: user._id,
+      date: args.date,
+      status: args.status,
+      source: "dashboard_quick",
+      conversationSummary: "Seeded manual completion for reminder matrix",
+      aiResponse: "[seed_manual_checkin]",
+      timestamp,
+    });
+
+    if (args.status === "completed") {
+      const nextStreak = habit.currentStreak + 1;
+      await ctx.db.patch(habit._id, {
+        currentStreak: nextStreak,
+        bestStreak: Math.max(habit.bestStreak, nextStreak),
+      });
+    }
+
+    await upsertSeedReminderRunState({
+      ctx,
+      userId: user._id,
+      habitId: habit._id,
+      date: args.date,
+      state: "completed",
+      now: timestamp,
+      userResponded: false,
+      responseIntent: "dashboard_quick",
+      responseSummary: "Seeded completion before next reminder stage.",
+    });
+
+    return {
+      status: "executed",
+      checkInId,
+      habitId: habit._id,
+      habitName: habit.name,
+      timestamp,
+    };
+  },
+});
+
+export const seedPhase6ReminderSentStage = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    habitName: v.string(),
+    date: v.string(),
+    type: v.union(
+      v.literal("pre_workout"),
+      v.literal("check_in"),
+      v.literal("late_follow_up"),
+    ),
+    confirmation: v.literal("phase6-reminder-matrix"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const habit = await findUserHabitByName(ctx, user._id, args.habitName);
+    if (!habit) {
+      throw new Error("Habit not found for reminder sent-stage seed");
+    }
+
+    const reminder = ((await ctx.db
+      .query("reminders")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect()) as Doc<"reminders">[]).find(
+      (entry) =>
+        entry.habitId === habit._id &&
+        entry.date === args.date &&
+        entry.type === args.type,
+    );
+
+    if (!reminder) {
+      throw new Error("Reminder row not found for sent-stage seed");
+    }
+
+    await ctx.db.patch(reminder._id, { sent: true });
+
+    const messageId = await ctx.db.insert("messages", {
+      userId: user._id,
+      habitId: habit._id,
+      role: "ai",
+      content: `[seed ${args.type} sent]`,
+      intent:
+        args.type === "pre_workout"
+          ? "reminder_pre_workout"
+          : args.type === "check_in"
+            ? "reminder_check_in"
+            : "reminder_late_follow_up",
+      timestamp: reminder.scheduledFor,
+    });
+
+    return {
+      messageId,
+      reminderId: reminder._id,
+      habitId: habit._id,
+      habitName: habit.name,
+      type: args.type,
+    };
+  },
+});
+
+export const processPhase6ReminderStage = action({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    habitName: v.string(),
+    date: v.string(),
+    type: v.union(
+      v.literal("pre_workout"),
+      v.literal("check_in"),
+      v.literal("late_follow_up"),
+    ),
+    confirmation: v.literal("phase6-reminder-matrix"),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    processed: number;
+    reminderId?: Id<"reminders">;
+    habitId: Id<"habits">;
+    habitName: string;
+    date: string;
+    type: "pre_workout" | "check_in" | "late_follow_up";
+    shouldSendPush?: boolean;
+    skipped?: boolean;
+    messageId?: Id<"messages">;
+    checkInCreatedId?: Id<"checkIns">;
+  }> => {
+    const user = (await ctx.runQuery(internal.devSeeds.resolveSeedUser, {
+      email: args.email,
+      clerkId: args.clerkId,
+    })) as Doc<"users"> | null;
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const habits = (await ctx.runQuery(internal.devSeeds.listSeedHabitsForUser, {
+      userId: user._id,
+    })) as Doc<"habits">[];
+    const normalizedName = args.habitName.trim().toLowerCase();
+    const habit =
+      habits.find((entry) => entry.name.trim().toLowerCase() === normalizedName) ??
+      habits.find((entry) =>
+        entry.name.trim().toLowerCase().includes(normalizedName),
+      ) ??
+      (habits.length === 1 ? habits[0] : null) ??
+      null;
+    if (!habit) {
+      throw new Error("Habit not found for reminder matrix processing");
+    }
+
+    const reminder: Doc<"reminders"> | undefined = ((await ctx.runQuery(
+      internal.reminders.listDue,
+      {
+      before: Number.MAX_SAFE_INTEGER,
+      },
+    )) as Doc<"reminders">[]).find(
+      (entry) =>
+        entry.userId === user._id &&
+        entry.habitId === habit._id &&
+        entry.date === args.date &&
+        entry.type === args.type &&
+        !entry.sent,
+    );
+
+    if (!reminder) {
+      return {
+        processed: 0,
+        habitId: habit._id,
+        habitName: habit.name,
+        date: args.date,
+        type: args.type,
+      };
+    }
+
+    const result = (await ctx.runAction(
+      internal.notificationsAction.processSingleReminderDelivery,
+      {
+        reminderId: reminder._id,
+        skipPushDelivery: true,
+      },
+    )) as
+      | {
+          processed?: number;
+          shouldSendPush?: boolean;
+          skipped?: boolean;
+          messageId?: Id<"messages">;
+          checkInCreatedId?: Id<"checkIns">;
+        }
+      | null;
+
+    return {
+      processed: result?.processed ?? 0,
+      reminderId: reminder._id,
+      habitId: habit._id,
+      habitName: habit.name,
+      date: args.date,
+      type: args.type,
+      shouldSendPush: Boolean(result?.shouldSendPush),
+      skipped: Boolean(result?.skipped),
+      messageId: result?.messageId,
+      checkInCreatedId: result?.checkInCreatedId,
+    };
+  },
+});
+
+async function clearUserWorkspace(ctx: MutationCtx, userId: Id<"users">) {
+  const habits = (await ctx.db
+    .query("habits")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"habits">[];
+  const habitIds = habits.map((habit) => habit._id);
+
+  const reminders = (await ctx.db
+    .query("reminders")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"reminders">[];
+  const reminderRuns = (await ctx.db
+    .query("reminderRuns")
+    .withIndex("by_user_date", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"reminderRuns">[];
+  const messages = (await ctx.db
+    .query("messages")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"messages">[];
+  const checkIns = (await ctx.db
+    .query("checkIns")
+    .withIndex("by_user_date", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"checkIns">[];
+  const habitSkips = (await ctx.db
+    .query("habitSkips")
+    .withIndex("by_user_date", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"habitSkips">[];
+  const actionLogs = (await ctx.db
+    .query("agentActionLogs")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"agentActionLogs">[];
+  const pendingActions = (await ctx.db
+    .query("agentPendingActions")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"agentPendingActions">[];
+  const tasks = (await ctx.db
+    .query("agentTasks")
+    .withIndex("by_user_date", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"agentTasks">[];
+  const episodes = (await ctx.db
+    .query("agentEpisodes")
+    .withIndex("by_user_date", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"agentEpisodes">[];
+  const memories = (await ctx.db
+    .query("agentMemory")
+    .withIndex("by_user_scope", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"agentMemory">[];
+  const weeklyReports = (await ctx.db
+    .query("weeklyReports")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"weeklyReports">[];
+  const modelRuns = (await ctx.db
+    .query("agentModelRuns")
+    .withIndex("by_user_createdAt", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"agentModelRuns">[];
+
+  const checkInIds = checkIns.map((checkIn) => checkIn._id);
+  const workoutLogGroups = (await Promise.all(
+    habitIds.map((habitId) =>
+      ctx.db
+        .query("workoutLogs")
+        .withIndex("by_habit", (q) => q.eq("habitId", habitId))
+        .collect(),
+    ),
+  )) as Doc<"workoutLogs">[][];
+  const workoutLogs = workoutLogGroups
+    .flat()
+    .filter((workoutLog) => checkInIds.includes(workoutLog.checkInId));
+
+  for (const reminder of reminders) {
+    await ctx.db.delete(reminder._id);
+  }
+  for (const reminderRun of reminderRuns) {
+    await ctx.db.delete(reminderRun._id);
+  }
+  for (const actionLog of actionLogs) {
+    await ctx.db.delete(actionLog._id);
+  }
+  for (const pendingAction of pendingActions) {
+    await ctx.db.delete(pendingAction._id);
+  }
+  for (const episode of episodes) {
+    await ctx.db.delete(episode._id);
+  }
+  for (const memory of memories) {
+    await ctx.db.delete(memory._id);
+  }
+  for (const weeklyReport of weeklyReports) {
+    await ctx.db.delete(weeklyReport._id);
+  }
+  for (const modelRun of modelRuns) {
+    await ctx.db.delete(modelRun._id);
+  }
+  for (const habitSkip of habitSkips) {
+    await ctx.db.delete(habitSkip._id);
+  }
+  for (const task of tasks) {
+    await ctx.db.delete(task._id);
+  }
+  for (const workoutLog of workoutLogs) {
+    await ctx.db.delete(workoutLog._id);
+  }
+  for (const checkIn of checkIns) {
+    await ctx.db.delete(checkIn._id);
+  }
+  for (const message of messages) {
+    await ctx.db.delete(message._id);
+  }
+  for (const habit of habits) {
+    await ctx.db.delete(habit._id);
+  }
+
+  return {
+    habits: habits.length,
+    reminders: reminders.length,
+    reminderRuns: reminderRuns.length,
+    messages: messages.length,
+    checkIns: checkIns.length,
+    workoutLogs: workoutLogs.length,
+    habitSkips: habitSkips.length,
+    actionLogs: actionLogs.length,
+    pendingActions: pendingActions.length,
+    tasks: tasks.length,
+    episodes: episodes.length,
+    memories: memories.length,
+    weeklyReports: weeklyReports.length,
+    modelRuns: modelRuns.length,
+  };
+}
+
 type SeedUserLookupArgs = {
   email?: string;
   clerkId?: string;
@@ -214,6 +966,112 @@ async function findUserFromArgsInQuery(ctx: QueryCtx, args: SeedUserLookupArgs) 
   requireSeedLookupArgs(args);
   const users = (await ctx.db.query("users").collect()) as Doc<"users">[];
   return resolveUserFromLookup(users, args);
+}
+
+async function findUserHabitByName(
+  ctx: MutationCtx | QueryCtx,
+  userId: Id<"users">,
+  habitName: string,
+) {
+  const habits = (await ctx.db
+    .query("habits")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect()) as Doc<"habits">[];
+  const normalizedName = habitName.trim().toLowerCase();
+
+  return (
+    habits.find(
+      (habit) => habit.name.trim().toLowerCase() === normalizedName,
+    ) ??
+    habits.find((habit) =>
+      habit.name.trim().toLowerCase().includes(normalizedName),
+    ) ??
+    (habits.length === 1 ? habits[0] : null) ??
+    null
+  );
+}
+
+function getReminderStageWindow(args: {
+  reminders: Doc<"reminders">[];
+  stage: "post" | "due" | "deadline";
+}) {
+  const pre = args.reminders.find((entry) => entry.type === "pre_workout") ?? null;
+  const due = args.reminders.find((entry) => entry.type === "check_in") ?? null;
+  const late =
+    args.reminders.find((entry) => entry.type === "late_follow_up") ?? null;
+
+  if (args.stage === "post") {
+    if (!pre || !due) {
+      throw new Error("Missing pre/due reminder rows for post-stage window");
+    }
+    return {
+      start: pre.scheduledFor + 2 * 60 * 1000,
+      end: due.scheduledFor - 60 * 1000,
+    };
+  }
+
+  if (args.stage === "due") {
+    if (!due || !late) {
+      throw new Error("Missing due/late reminder rows for due-stage window");
+    }
+    return {
+      start: due.scheduledFor + 2 * 60 * 1000,
+      end: late.scheduledFor - 60 * 1000,
+    };
+  }
+
+  if (!late) {
+    throw new Error("Missing late reminder row for deadline-stage window");
+  }
+
+  return {
+    start: late.scheduledFor + 2 * 60 * 1000,
+    end: late.scheduledFor + 10 * 60 * 1000,
+  };
+}
+
+async function upsertSeedReminderRunState(args: {
+  ctx: MutationCtx;
+  userId: Id<"users">;
+  habitId: Id<"habits">;
+  date: string;
+  state: Doc<"reminderRuns">["state"];
+  now: number;
+  userResponded: boolean;
+  responseIntent?: string;
+  responseSummary?: string;
+}) {
+  const existing = await args.ctx.db
+    .query("reminderRuns")
+    .withIndex("by_user_habit_date", (q) =>
+      q.eq("userId", args.userId)
+        .eq("habitId", args.habitId)
+        .eq("date", args.date),
+    )
+    .unique();
+
+  if (existing) {
+    await args.ctx.db.patch(existing._id, {
+      state: args.state,
+      userResponded: args.userResponded,
+      responseIntent: args.responseIntent,
+      responseSummary: args.responseSummary,
+      updatedAt: args.now,
+    });
+    return existing._id;
+  }
+
+  return await args.ctx.db.insert("reminderRuns", {
+    userId: args.userId,
+    habitId: args.habitId,
+    date: args.date,
+    state: args.state,
+    userResponded: args.userResponded,
+    responseIntent: args.responseIntent,
+    responseSummary: args.responseSummary,
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
 }
 
 async function clearUserDerivedMemory(ctx: MutationCtx, userId: Id<"users">) {
@@ -458,6 +1316,349 @@ export const getPhase5VerificationSnapshot = query({
       userId: user._id,
       userEmail: user.email,
       snapshot,
+    };
+  },
+});
+
+function matchesSeedPrefix(value: string, prefixes: string[]) {
+  if (prefixes.length === 0) {
+    return true;
+  }
+
+  return prefixes.some((prefix) => value.startsWith(prefix));
+}
+
+function applyCollectionLimit<T>(rows: T[], limit: number | null) {
+  if (!limit || rows.length <= limit) {
+    return rows;
+  }
+
+  return rows.slice(-limit);
+}
+
+export const getAgentEvaluationSnapshot = query({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    seedPrefixes: v.optional(v.array(v.string())),
+    includeAllHabits: v.optional(v.boolean()),
+    includeNonHabitMessages: v.optional(v.boolean()),
+    limitPerCollection: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgsInQuery(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const seedPrefixes = (args.seedPrefixes ?? [])
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const includeAllHabits =
+      args.includeAllHabits ?? seedPrefixes.length === 0;
+    const includeNonHabitMessages = args.includeNonHabitMessages ?? true;
+    const normalizedLimit =
+      args.limitPerCollection && args.limitPerCollection > 0
+        ? Math.min(Math.floor(args.limitPerCollection), 1000)
+        : null;
+
+    const habits = ((await ctx.db
+      .query("habits")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect()) as Doc<"habits">[])
+      .filter((habit) =>
+        includeAllHabits ? true : matchesSeedPrefix(habit.name, seedPrefixes),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const habitIds = new Set(habits.map((habit) => habit._id));
+    const habitIdStrings = new Set(habits.map((habit) => String(habit._id)));
+
+    const reminders = applyCollectionLimit(
+      ((await ctx.db
+        .query("reminders")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"reminders">[])
+        .filter((reminder) =>
+          includeAllHabits ? true : habitIds.has(reminder.habitId),
+        )
+        .sort((left, right) => left.scheduledFor - right.scheduledFor),
+      normalizedLimit,
+    );
+
+    const reminderRuns = applyCollectionLimit(
+      ((await ctx.db
+        .query("reminderRuns")
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"reminderRuns">[])
+        .filter((run) => (includeAllHabits ? true : habitIds.has(run.habitId)))
+        .sort((left, right) => {
+          if (left.date !== right.date) return left.date.localeCompare(right.date);
+          if (left.habitId !== right.habitId) {
+            return String(left.habitId).localeCompare(String(right.habitId));
+          }
+          return left.updatedAt - right.updatedAt;
+        }),
+      normalizedLimit,
+    );
+
+    const checkIns = applyCollectionLimit(
+      ((await ctx.db
+        .query("checkIns")
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"checkIns">[])
+        .filter((checkIn) =>
+          includeAllHabits ? true : habitIds.has(checkIn.habitId),
+        )
+        .sort((left, right) => {
+          if (left.date !== right.date) return left.date.localeCompare(right.date);
+          if (left.habitId !== right.habitId) {
+            return String(left.habitId).localeCompare(String(right.habitId));
+          }
+          return left.timestamp - right.timestamp;
+        }),
+      normalizedLimit,
+    );
+
+    const workoutLogs = applyCollectionLimit(
+      ((await ctx.db.query("workoutLogs").collect()) as Doc<"workoutLogs">[])
+        .filter((log) => {
+          if (includeAllHabits) {
+            return true;
+          }
+
+          return habitIds.has(log.habitId);
+        })
+        .sort((left, right) =>
+          String(left.checkInId).localeCompare(String(right.checkInId)),
+        ),
+      normalizedLimit,
+    );
+
+    const messages = applyCollectionLimit(
+      ((await ctx.db
+        .query("messages")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"messages">[])
+        .filter((message) => {
+          if (includeAllHabits) {
+            return true;
+          }
+
+          if (message.habitId) {
+            return habitIds.has(message.habitId);
+          }
+
+          return includeNonHabitMessages;
+        })
+        .sort((left, right) => left.timestamp - right.timestamp),
+      normalizedLimit,
+    );
+    const messageIds = new Set(messages.map((message) => message._id));
+
+    const actionLogs = applyCollectionLimit(
+      ((await ctx.db
+        .query("agentActionLogs")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"agentActionLogs">[])
+        .filter((log) => {
+          if (includeAllHabits) {
+            return true;
+          }
+
+          return (
+            (log.messageId && messageIds.has(log.messageId)) ||
+            (log.targetId && habitIdStrings.has(log.targetId))
+          );
+        })
+        .sort((left, right) => left.createdAt - right.createdAt),
+      normalizedLimit,
+    );
+
+    const pendingActions = applyCollectionLimit(
+      ((await ctx.db
+        .query("agentPendingActions")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"agentPendingActions">[])
+        .filter((pendingAction) => {
+          if (includeAllHabits) {
+            return true;
+          }
+
+          return (
+            (pendingAction.targetHabitId &&
+              habitIds.has(pendingAction.targetHabitId)) ||
+            (pendingAction.messageId && messageIds.has(pendingAction.messageId))
+          );
+        })
+        .sort((left, right) => left.updatedAt - right.updatedAt),
+      normalizedLimit,
+    );
+
+    const tasks = applyCollectionLimit(
+      ((await ctx.db
+        .query("agentTasks")
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"agentTasks">[])
+        .sort((left, right) => {
+          if (left.date !== right.date) return left.date.localeCompare(right.date);
+          if ((left.time ?? "") !== (right.time ?? "")) {
+            return (left.time ?? "").localeCompare(right.time ?? "");
+          }
+          return left.createdAt - right.createdAt;
+        }),
+      normalizedLimit,
+    );
+
+    const habitSkips = applyCollectionLimit(
+      ((await ctx.db
+        .query("habitSkips")
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"habitSkips">[])
+        .filter((skip) => (includeAllHabits ? true : habitIds.has(skip.habitId)))
+        .sort((left, right) => {
+          if (left.date !== right.date) return left.date.localeCompare(right.date);
+          if (left.habitId !== right.habitId) {
+            return String(left.habitId).localeCompare(String(right.habitId));
+          }
+          return left.createdAt - right.createdAt;
+        }),
+      normalizedLimit,
+    );
+
+    const episodes = applyCollectionLimit(
+      ((await ctx.db
+        .query("agentEpisodes")
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"agentEpisodes">[])
+        .filter((episode) => {
+          if (includeAllHabits) {
+            return true;
+          }
+
+          return (
+            (episode.habitId && habitIds.has(episode.habitId)) ||
+            (episode.sourceMessageId && messageIds.has(episode.sourceMessageId))
+          );
+        })
+        .sort((left, right) => {
+          if (left.date !== right.date) return left.date.localeCompare(right.date);
+          return left.createdAt - right.createdAt;
+        }),
+      normalizedLimit,
+    );
+
+    const memories = applyCollectionLimit(
+      ((await ctx.db
+        .query("agentMemory")
+        .withIndex("by_user_scope", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"agentMemory">[])
+        .filter((memory) =>
+          memory.scope === "global"
+            ? true
+            : includeAllHabits
+              ? true
+              : Boolean(memory.habitId && habitIds.has(memory.habitId)),
+        )
+        .sort((left, right) => left.updatedAt - right.updatedAt),
+      normalizedLimit,
+    );
+
+    const weeklyReports = applyCollectionLimit(
+      ((await ctx.db
+        .query("weeklyReports")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"weeklyReports">[])
+        .filter((report) => (includeAllHabits ? true : habitIds.has(report.habitId)))
+        .sort((left, right) => {
+          if (left.weekStart !== right.weekStart) {
+            return left.weekStart.localeCompare(right.weekStart);
+          }
+          return String(left.habitId).localeCompare(String(right.habitId));
+        }),
+      normalizedLimit,
+    );
+
+    const modelRuns = applyCollectionLimit(
+      ((await ctx.db
+        .query("agentModelRuns")
+        .withIndex("by_user_createdAt", (q) => q.eq("userId", user._id))
+        .collect()) as Doc<"agentModelRuns">[])
+        .filter((run) => {
+          if (includeAllHabits) {
+            return true;
+          }
+
+          return (
+            (run.habitId && habitIds.has(run.habitId)) ||
+            (run.userMessageId && messageIds.has(run.userMessageId)) ||
+            (run.aiMessageId && messageIds.has(run.aiMessageId))
+          );
+        })
+        .sort((left, right) => left.createdAt - right.createdAt),
+      normalizedLimit,
+    ).map((run) => ({
+      _id: run._id,
+      _creationTime: run._creationTime,
+      aiMessageId: run.aiMessageId,
+      createdAt: run.createdAt,
+      estimatedCostUsd: run.estimatedCostUsd,
+      fallbackDepth: run.fallbackDepth,
+      finalModel: run.finalModel,
+      finalProvider: run.finalProvider,
+      habitId: run.habitId,
+      purpose: run.purpose,
+      source: run.source,
+      userMessageId: run.userMessageId,
+      userId: run.userId,
+    }));
+
+    return {
+      user: {
+        id: user._id,
+        email: user.email,
+        clerkId: user.clerkId,
+        timezone: user.timezone ?? "UTC",
+      },
+      filters: {
+        seedPrefixes,
+        includeAllHabits,
+        includeNonHabitMessages,
+        limitPerCollection: normalizedLimit,
+      },
+      counts: {
+        habits: habits.length,
+        reminders: reminders.length,
+        reminderRuns: reminderRuns.length,
+        checkIns: checkIns.length,
+        workoutLogs: workoutLogs.length,
+        messages: messages.length,
+        actionLogs: actionLogs.length,
+        pendingActions: pendingActions.length,
+        tasks: tasks.length,
+        habitSkips: habitSkips.length,
+        episodes: episodes.length,
+        memories: memories.length,
+        weeklyReports: weeklyReports.length,
+        modelRuns: modelRuns.length,
+      },
+      snapshot: {
+        habits,
+        reminders,
+        reminderRuns,
+        checkIns,
+        workoutLogs,
+        messages,
+        actionLogs,
+        pendingActions,
+        tasks,
+        habitSkips,
+        episodes,
+        memories,
+        weeklyReports,
+        modelRuns,
+      },
     };
   },
 });
@@ -1146,18 +2347,20 @@ export const processPhase3DueReminders = action({
     }> = [];
 
     for (const reminder of userDue) {
-      const result = (await ctx.runMutation(
-        internal.reminders.processReminder,
+      const result = (await ctx.runAction(
+        internal.notificationsAction.processSingleReminderDelivery,
         {
           reminderId: reminder._id,
+          skipPushDelivery: true,
         },
       )) as {
+        processed?: number;
         shouldSendPush?: boolean;
         skipped?: boolean;
         checkInCreatedId?: Id<"checkIns">;
       } | null;
 
-      if (!result) {
+      if (!result?.processed) {
         continue;
       }
 
@@ -1651,19 +2854,21 @@ export const processPhase4DueReminders = action({
     }> = [];
 
     for (const reminder of filtered) {
-      const result = (await ctx.runMutation(
-        internal.reminders.processReminder,
+      const result = (await ctx.runAction(
+        internal.notificationsAction.processSingleReminderDelivery,
         {
           reminderId: reminder._id,
+          skipPushDelivery: true,
         },
       )) as {
+        processed?: number;
         shouldSendPush?: boolean;
         skipped?: boolean;
         messageId?: Id<"messages">;
         checkInCreatedId?: Id<"checkIns">;
       } | null;
 
-      if (!result) {
+      if (!result?.processed) {
         continue;
       }
 
@@ -2171,16 +3376,21 @@ export const processPhase5DueReminders = action({
     }> = [];
 
     for (const reminder of filtered) {
-      const result = (await ctx.runMutation(internal.reminders.processReminder, {
-        reminderId: reminder._id,
-      })) as {
+      const result = (await ctx.runAction(
+        internal.notificationsAction.processSingleReminderDelivery,
+        {
+          reminderId: reminder._id,
+          skipPushDelivery: true,
+        },
+      )) as {
+        processed?: number;
         shouldSendPush?: boolean;
         skipped?: boolean;
         messageId?: Id<"messages">;
         checkInCreatedId?: Id<"checkIns">;
       } | null;
 
-      if (!result) {
+      if (!result?.processed) {
         continue;
       }
 

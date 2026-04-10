@@ -17,15 +17,34 @@ type PlannerItemStatus =
   | "rescheduled"
   | "done"
   | "cancelled";
+type PlannerTimingState =
+  | "completed"
+  | "missed"
+  | "bonus"
+  | "skipped"
+  | "cancelled"
+  | "done"
+  | "unscheduled"
+  | "upcoming"
+  | "due_soon"
+  | "overdue"
+  | "deadline_passed";
 type PlannerItem = {
   itemType: "habit" | "task";
   itemId: string;
   title: string;
   scheduledTime: string | null;
+  deadlineTime: string | null;
   status: PlannerItemStatus;
   riskNote: string;
   conflictWith: string[];
   itemDate: string;
+  timingState: PlannerTimingState;
+  timingNote: string | null;
+  minutesUntilScheduled: number | null;
+  minutesUntilDeadline: number | null;
+  minutesLateFromScheduled: number | null;
+  minutesLateFromDeadline: number | null;
 };
 type RiskScanItem = {
   itemType: "habit" | "task";
@@ -70,6 +89,76 @@ function shiftDateKey(dateKey: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function dayKeyFromDateKey(dateKey: string) {
+  return getDayKey(new Date(`${dateKey}T12:00:00.000Z`), "UTC");
+}
+
+function isHabitScheduledForDate(habit: Doc<"habits">, dateKey: string) {
+  return habit.targetDays.includes(dayKeyFromDateKey(dateKey));
+}
+
+function getPreviousScheduledDate(dateKey: string, targetDays: string[]) {
+  let cursor = dateKey;
+  for (let step = 0; step < 14; step += 1) {
+    cursor = shiftDateKey(cursor, -1);
+    if (targetDays.includes(dayKeyFromDateKey(cursor))) {
+      return cursor;
+    }
+  }
+  return null;
+}
+
+function computeStreakMetrics(args: {
+  habit: Doc<"habits">;
+  checkIns: Doc<"checkIns">[];
+}) {
+  const sorted = [...args.checkIns].sort(compareCheckInsDesc);
+  const byDate = new Map<string, Doc<"checkIns">>();
+  for (const entry of sorted) {
+    if (!byDate.has(entry.date)) {
+      byDate.set(entry.date, entry);
+    }
+  }
+
+  const successfulDates = [...byDate.entries()]
+    .filter(([, entry]) => entry.status === "completed")
+    .map(([date]) => date)
+    .sort((left, right) => right.localeCompare(left));
+
+  let currentStreak = 0;
+  if (successfulDates.length > 0) {
+    let cursor: string | null = successfulDates[0];
+    while (cursor) {
+      const entry = byDate.get(cursor);
+      if (!entry || entry.status !== "completed") {
+        break;
+      }
+      currentStreak += 1;
+      cursor = getPreviousScheduledDate(cursor, args.habit.targetDays);
+    }
+  }
+
+  let bestStreak = 0;
+  for (const date of successfulDates) {
+    let streak = 0;
+    let cursor: string | null = date;
+    while (cursor) {
+      const entry = byDate.get(cursor);
+      if (!entry || entry.status !== "completed") {
+        break;
+      }
+      streak += 1;
+      cursor = getPreviousScheduledDate(cursor, args.habit.targetDays);
+    }
+    bestStreak = Math.max(bestStreak, streak);
+  }
+
+  return {
+    currentStreak,
+    bestStreak: Math.max(args.habit.bestStreak, bestStreak),
+  };
+}
+
 function compareCheckInsDesc(left: Doc<"checkIns">, right: Doc<"checkIns">) {
   if (left.date !== right.date) {
     return right.date.localeCompare(left.date);
@@ -90,6 +179,171 @@ function minutesToTime(totalMinutes: number) {
     .padStart(2, "0");
   const minutes = (normalized % 60).toString().padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function formatDuration(totalMinutes: number) {
+  const safeMinutes = Math.max(0, totalMinutes);
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
+
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+
+  if (minutes === 0) {
+    return `${hours}j`;
+  }
+
+  return `${hours}j ${minutes}m`;
+}
+
+function buildPlannerTiming(args: {
+  itemType: PlannerItem["itemType"];
+  itemDate: string;
+  todayDate: string;
+  status: PlannerItemStatus;
+  scheduledTime: string | null;
+  deadlineTime: string | null;
+  nowMinutes: number;
+}) {
+  const base = {
+    deadlineTime: args.deadlineTime,
+    minutesUntilScheduled: null as number | null,
+    minutesUntilDeadline: null as number | null,
+    minutesLateFromScheduled: null as number | null,
+    minutesLateFromDeadline: null as number | null,
+  };
+
+  if (args.status === "completed") {
+    return {
+      ...base,
+      timingState: "completed" as const,
+      timingNote: "sudah selesai",
+    };
+  }
+
+  if (args.status === "done") {
+    return {
+      ...base,
+      timingState: "done" as const,
+      timingNote: "sudah selesai",
+    };
+  }
+
+  if (args.status === "bonus") {
+    return {
+      ...base,
+      timingState: "bonus" as const,
+      timingNote: "bonus sudah masuk",
+    };
+  }
+
+  if (args.status === "missed") {
+    return {
+      ...base,
+      timingState: "missed" as const,
+      timingNote: "sudah miss",
+    };
+  }
+
+  if (args.status === "skipped") {
+    return {
+      ...base,
+      timingState: "skipped" as const,
+      timingNote: "skip sengaja",
+    };
+  }
+
+  if (args.status === "cancelled") {
+    return {
+      ...base,
+      timingState: "cancelled" as const,
+      timingNote: "dibatalin",
+    };
+  }
+
+  if (!args.scheduledTime) {
+    return {
+      ...base,
+      timingState: "unscheduled" as const,
+      timingNote:
+        args.itemType === "task" ? "butuh jam yang jelas" : "belum punya slot yang jelas",
+    };
+  }
+
+  if (args.itemDate > args.todayDate) {
+    return {
+      ...base,
+      timingState: "upcoming" as const,
+      timingNote: null,
+    };
+  }
+
+  if (args.itemDate < args.todayDate) {
+    return {
+      ...base,
+      timingState: "overdue" as const,
+      timingNote: `masih kebawa dari ${args.itemDate}`,
+    };
+  }
+
+  const scheduledMinutes = timeToMinutes(args.scheduledTime);
+  const deadlineMinutes =
+    args.deadlineTime != null ? timeToMinutes(args.deadlineTime) : null;
+  const minutesUntilScheduled = scheduledMinutes - args.nowMinutes;
+  const minutesLateFromScheduled =
+    minutesUntilScheduled < 0 ? Math.abs(minutesUntilScheduled) : null;
+  const minutesUntilDeadline =
+    deadlineMinutes != null ? deadlineMinutes - args.nowMinutes : null;
+  const minutesLateFromDeadline =
+    minutesUntilDeadline != null && minutesUntilDeadline < 0
+      ? Math.abs(minutesUntilDeadline)
+      : null;
+
+  if (minutesUntilScheduled > 0) {
+    return {
+      ...base,
+      timingState:
+        minutesUntilScheduled <= 60 ? ("due_soon" as const) : ("upcoming" as const),
+      timingNote: `mulai ${formatDuration(minutesUntilScheduled)} lagi`,
+      minutesUntilScheduled,
+      minutesUntilDeadline,
+      minutesLateFromScheduled,
+      minutesLateFromDeadline,
+    };
+  }
+
+  if (minutesUntilDeadline != null && minutesUntilDeadline < 0) {
+    return {
+      ...base,
+      timingState: "deadline_passed" as const,
+      timingNote: `deadline ${args.deadlineTime} sudah lewat ${formatDuration(
+        Math.abs(minutesUntilDeadline),
+      )}`,
+      minutesUntilScheduled,
+      minutesUntilDeadline,
+      minutesLateFromScheduled,
+      minutesLateFromDeadline,
+    };
+  }
+
+  const overdueParts = [
+    `sudah lewat ${formatDuration(Math.abs(minutesUntilScheduled))} dari jam ${args.scheduledTime}`,
+  ];
+
+  if (minutesUntilDeadline != null && minutesUntilDeadline >= 0) {
+    overdueParts.push(`deadline ${formatDuration(minutesUntilDeadline)} lagi`);
+  }
+
+  return {
+    ...base,
+    timingState: "overdue" as const,
+    timingNote: overdueParts.join(", "),
+    minutesUntilScheduled,
+    minutesUntilDeadline,
+    minutesLateFromScheduled,
+    minutesLateFromDeadline,
+  };
 }
 
 function shiftScheduleTimes(args: {
@@ -379,6 +633,9 @@ function buildPlanForDate(args: {
   const dayKey = getDayKey(planDate, args.state.timezone);
   const date7dStart = shiftDateKey(args.date, -6);
   const todayDate = getDateKey(new Date(args.now), args.state.timezone);
+  const nowMinutes = timeToMinutes(
+    formatInTimeZone(new Date(args.now), args.state.timezone, "HH:mm"),
+  );
   const checkInsForDate = args.state.checkIns.filter((entry) => entry.date === args.date);
   const remindersForDate = args.state.reminders.filter((entry) => entry.date === args.date);
   const skipsForDate = args.state.skips.filter((entry) => entry.date === args.date);
@@ -444,6 +701,15 @@ function buildPlanForDate(args: {
             : baseRiskNote,
         conflictWith: [],
         itemDate: args.date,
+        ...buildPlannerTiming({
+          itemType: "habit",
+          itemDate: args.date,
+          todayDate,
+          status,
+          scheduledTime: schedule.scheduledTime,
+          deadlineTime: schedule.checkInDeadline,
+          nowMinutes,
+        }),
         skipped: Boolean(skip),
         skipReason: skip?.reason ?? null,
         checkInStatus: checkIn?.status ?? null,
@@ -487,6 +753,15 @@ function buildPlanForDate(args: {
       riskNote: getTaskRiskNote(task),
       conflictWith: [],
       itemDate: args.date,
+      ...buildPlannerTiming({
+        itemType: "task",
+        itemDate: args.date,
+        todayDate,
+        status: task.status as PlannerItemStatus,
+        scheduledTime: task.time ?? null,
+        deadlineTime: null,
+        nowMinutes,
+      }),
     }));
 
   const items = applyConflictHints([...filteredHabitItems, ...taskItems]).sort(
@@ -567,7 +842,7 @@ export const executeLogCompletion = internalMutation({
       date: args.date,
     });
 
-    if (existing) {
+    if (existing && existing.status !== "missed") {
       return {
         status: "no_op" as const,
         habitId: args.habitId,
@@ -578,17 +853,30 @@ export const executeLogCompletion = internalMutation({
       };
     }
 
-    const checkInId = await ctx.db.insert("checkIns", {
-      habitId: args.habitId,
-      userId: args.userId,
-      date: args.date,
-      status: args.status,
-      source: "chat",
-      userReason: args.reason,
-      conversationSummary: args.conversationSummary,
-      aiResponse: "[pending_ai_response]",
-      timestamp: args.timestamp,
-    });
+    let checkInId: Id<"checkIns">;
+    if (existing && existing.status === "missed") {
+      checkInId = existing._id;
+      await ctx.db.patch(existing._id, {
+        status: args.status,
+        source: "chat",
+        userReason: args.reason,
+        conversationSummary: args.conversationSummary,
+        aiResponse: "[pending_ai_response]",
+        timestamp: args.timestamp,
+      });
+    } else {
+      checkInId = await ctx.db.insert("checkIns", {
+        habitId: args.habitId,
+        userId: args.userId,
+        date: args.date,
+        status: args.status,
+        source: "chat",
+        userReason: args.reason,
+        conversationSummary: args.conversationSummary,
+        aiResponse: "[pending_ai_response]",
+        timestamp: args.timestamp,
+      });
+    }
 
     if (args.status === "completed") {
       const nextStreak = habit.currentStreak + 1;
@@ -600,12 +888,27 @@ export const executeLogCompletion = internalMutation({
 
     let workoutLogId: Id<"workoutLogs"> | undefined;
     if (args.workout && args.workout.exercises.length > 0) {
-      workoutLogId = await ctx.db.insert("workoutLogs", {
-        habitId: args.habitId,
-        checkInId,
-        exercises: args.workout.exercises,
-        notes: args.workout.notes,
-      });
+      const existingWorkoutLog = ((await ctx.db
+        .query("workoutLogs")
+        .withIndex("by_habit", (q) => q.eq("habitId", args.habitId))
+        .collect()) as Doc<"workoutLogs">[]).find(
+        (entry) => entry.checkInId === checkInId,
+      );
+
+      if (existingWorkoutLog) {
+        workoutLogId = existingWorkoutLog._id;
+        await ctx.db.patch(existingWorkoutLog._id, {
+          exercises: args.workout.exercises,
+          notes: args.workout.notes,
+        });
+      } else {
+        workoutLogId = await ctx.db.insert("workoutLogs", {
+          habitId: args.habitId,
+          checkInId,
+          exercises: args.workout.exercises,
+          notes: args.workout.notes,
+        });
+      }
     }
 
     return {
@@ -778,7 +1081,18 @@ export const executeRescheduleHabitTime = internalMutation({
       throw new Error("User not found");
     }
 
-    const dayKey = getDayKey(new Date(`${args.targetDate}T12:00:00.000Z`), getTimezone(user));
+    const dayKey = dayKeyFromDateKey(args.targetDate);
+    if (!isHabitScheduledForDate(habit, args.targetDate)) {
+      return {
+        status: "no_op" as const,
+        reason: "not_scheduled_on_target_date" as const,
+        habitId: args.habitId,
+        habitName: habit.name,
+        targetDate: args.targetDate,
+        targetTime: args.targetTime,
+        dayKey,
+      };
+    }
 
     if (dayKey === "fri") {
       const baseSchedule = getScheduleForDay(habit, dayKey);
@@ -812,6 +1126,8 @@ export const executeRescheduleHabitTime = internalMutation({
 
     const updatedHabit = await ctx.db.get(args.habitId);
     return {
+      status: "executed" as const,
+      reason: null,
       habitId: args.habitId,
       habitName: updatedHabit?.name ?? habit.name,
       targetDate: args.targetDate,
@@ -833,6 +1149,19 @@ export const executeSkipHabitForDate = internalMutation({
     const habit = await ctx.db.get(args.habitId);
     if (!habit || habit.userId !== args.userId) {
       throw new Error("Habit not found");
+    }
+
+    const dayKey = dayKeyFromDateKey(args.date);
+    if (!isHabitScheduledForDate(habit, args.date)) {
+      return {
+        skipId: undefined,
+        habitId: args.habitId,
+        habitName: habit.name,
+        date: args.date,
+        status: "no_op" as const,
+        reason: "not_scheduled_on_target_date" as const,
+        dayKey,
+      };
     }
 
     const existing = await ctx.db
@@ -871,6 +1200,8 @@ export const executeSkipHabitForDate = internalMutation({
       habitName: habit.name,
       date: args.date,
       status,
+      reason: existing ? "already_exists" : null,
+      dayKey,
     };
   },
 });

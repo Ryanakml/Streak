@@ -133,6 +133,7 @@ export default defineSchema({
     userResponded: v.boolean(),
     responseIntent: v.optional(v.string()),
     responseSummary: v.optional(v.string()),
+    completionAcknowledgedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -278,6 +279,10 @@ export default defineSchema({
     finalProvider: v.string(),
     finalModel: v.string(),
     fallbackDepth: v.number(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    estimatedCostUsd: v.optional(v.number()),
+    accumulatedTotalCostUsd: v.optional(v.number()),
     attempts: v.array(
       v.object({
         provider: v.string(),
@@ -285,6 +290,9 @@ export default defineSchema({
         attemptOrder: v.number(),
         status: v.union(v.literal("success"), v.literal("failed")),
         errorSummary: v.optional(v.string()),
+        inputTokens: v.optional(v.number()),
+        outputTokens: v.optional(v.number()),
+        estimatedCostUsd: v.optional(v.number()),
       }),
     ),
     createdAt: v.number(),

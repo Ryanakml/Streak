@@ -155,6 +155,9 @@ async function generateRoast(args: {
       finalProvider: result.trace.finalProvider,
       finalModel: result.trace.finalModel,
       fallbackDepth: result.trace.fallbackDepth,
+      inputTokens: result.trace.inputTokens,
+      outputTokens: result.trace.outputTokens,
+      estimatedCostUsd: result.trace.estimatedCostUsd,
       attempts: result.trace.attempts,
       createdAt: Date.now(),
     });
@@ -170,23 +173,6 @@ async function generateRoast(args: {
       missedDaysReasons: args.missedDaysReasons,
     });
   }
-}
-
-function buildChatContent(args: {
-  habitName: string;
-  weekStart: string;
-  weekEnd: string;
-  targetCount: number;
-  actualCount: number;
-  bonusCount: number;
-  completionRate: number;
-  aiRoast: string;
-}) {
-  return [
-    `Weekly review for ${args.habitName} (${args.weekStart} to ${args.weekEnd}).`,
-    `Target ${args.targetCount}. Completed ${args.actualCount}. Bonus ${args.bonusCount}. Completion ${Math.round(args.completionRate)}%.`,
-    args.aiRoast,
-  ].join(" ");
 }
 
 async function pushWeeklyReview(
@@ -314,16 +300,7 @@ async function generateReportsForUser(
       completionRate,
       missedDaysReasons,
     });
-    const chatContent = buildChatContent({
-      habitName: habit.name,
-      weekStart: context.weekStart,
-      weekEnd: context.weekEnd,
-      targetCount,
-      actualCount,
-      bonusCount,
-      completionRate,
-      aiRoast,
-    });
+    const chatContent = aiRoast;
 
     const result = await ctx.runMutation(
       internal.weeklyReports.upsertGeneratedReport,
