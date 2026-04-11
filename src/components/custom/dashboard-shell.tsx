@@ -1561,8 +1561,8 @@ function getHabitPressureSnapshot(
         : "You handled today's rep. Tomorrow still expects the same standard.",
       streakLabel:
         habit.currentStreak > 0
-          ? `Streak rolling ${habit.currentStreak} days`
-          : "First clean log on record",
+          ? `| Streak rolling ${habit.currentStreak} days 🔥`
+          : "| First clean log on record",
       primaryActionLabel: "Review with coach",
       chatPrompt: `Give me the readout for ${habit.name} after today's log.`,
       cardClassName: isBonusLog

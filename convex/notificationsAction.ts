@@ -4,6 +4,7 @@ import webpush from "web-push";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { buildTaskReminderErrorFallback } from "./taskReminders";
 import { v } from "convex/values";
 import { callModelTextWithFallbackTrace } from "./modelProvider";
 
@@ -173,20 +174,6 @@ function buildReminderErrorFallback(
     : {
         chatContent: "Dudeeee",
         pushBody: "Dudeeee",
-      };
-}
-
-function buildTaskReminderErrorFallback(
-  languageHint: TaskReminderRewriteContext["languageHint"],
-) {
-  return languageHint === "indonesian"
-    ? {
-        chatContent: "Bro, task lo nungguin.",
-        pushBody: "Bro, task lo nungguin.",
-      }
-    : {
-        chatContent: "Your task is sitting there waiting.",
-        pushBody: "Your task is sitting there waiting.",
       };
 }
 
@@ -616,9 +603,12 @@ export const processDueReminders = internalAction({
     const dueReminders = await ctx.runQuery(internal.reminders.listDue, {
       before: args.before ?? Date.now(),
     });
-    const dueTaskReminders = await ctx.runQuery(internal.taskReminders.listDue, {
-      before: args.before ?? Date.now(),
-    });
+    const dueTaskReminders = await ctx.runQuery(
+      internal.taskReminders.listDue,
+      {
+        before: args.before ?? Date.now(),
+      },
+    );
 
     let processed = 0;
     let pushed = 0;

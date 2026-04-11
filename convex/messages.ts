@@ -19,6 +19,13 @@ async function requireOwnedUser(ctx: AuthCtx, userId: Id<"users">) {
   }
 }
 
+function assertDevOnly() {
+  const environment = process.env.NODE_ENV ?? "development";
+  if (environment === "production") {
+    throw new Error("listByUserForDebug is only available in development");
+  }
+}
+
 export const listByUser = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
@@ -46,10 +53,17 @@ export const listByHabit = query({
 export const listByUserForDebug = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    assertDevOnly();
+    const messages = await ctx.db
       .query("messages")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
+    return messages.map((message) => ({
+      id: message._id,
+      createdAt: message._creationTime,
+      isTaskReminder: message.intent === "task_reminder",
+      contentOmitted: true as const,
+    }));
   },
 });
 

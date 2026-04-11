@@ -10,32 +10,19 @@ if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
 
-// ─── CSS vars from your project theme ────────────────────────────────────────
-//  --background : #faf9f5  (light) / #262624  (dark)
-//  --foreground : #3d3929  (light) / #c3c0b6  (dark)
-//  --primary    : #c96442  (light) / #d97757  (dark)   ← terracotta accent
-//  --card       : #faf9f5  (light) / #262624  (dark)
-//  --border     : #dad9d4  (light) / #3e3e38  (dark)
-//  --muted      : #ede9de  (light) / #1b1b19  (dark)
-//  --muted-foreground: #83827d / #b7b5a9
-// ─────────────────────────────────────────────────────────────────────────────
-
 const INJECTED_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800;900&display=swap');
 
   * { box-sizing: border-box; }
 
-  /* GSAP needs visibility:hidden so elements don't flash before animation */
   .gsap-reveal { visibility: hidden; }
 
-  /* ── Subtle parchment grain ── */
   .film-grain {
     position: absolute; inset: 0; width: 100%; height: 100%;
     pointer-events: none; z-index: 50; opacity: 0.04; mix-blend-mode: multiply;
     background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="4" stitchTiles="stitch"/></filter><rect width="100%25" height="100%25" filter="url(%23n)"/></svg>');
   }
 
-  /* ── Warm dot-grid instead of white lines ── */
   .bg-grid-warm {
     background-size: 48px 48px;
     background-image:
@@ -43,9 +30,6 @@ const INJECTED_STYLES = `
     opacity: 0.45;
   }
 
-  /* ────────────────────────────────
-     TYPOGRAPHY
-  ─────────────────────────────────*/
   .font-streak { font-family: 'JetBrains Mono', 'Courier New', monospace; }
 
   .text-hero-main {
@@ -75,20 +59,13 @@ const INJECTED_STYLES = `
     font-size: clamp(10px, 1.1vw, 14px);
   }
 
-  /* ────────────────────────────────
-     MAIN SLAB CARD
-  ─────────────────────────────────*/
   .main-card {
     background: var(--card);
     border: 5px solid var(--foreground);
-    /* offset shadow in terracotta */
     box-shadow: 16px 16px 0 var(--primary);
     position: relative;
   }
 
-  /* ────────────────────────────────
-     PHONE MOCKUP
-  ─────────────────────────────────*/
   .phone-shell {
     background: var(--muted);
     border: 3px solid var(--foreground);
@@ -133,9 +110,6 @@ const INJECTED_STYLES = `
     background: var(--background);
   }
 
-  /* ────────────────────────────────
-     SCENE A: Habit List
-  ─────────────────────────────────*/
   .scene-idle {
     position: absolute; inset: 0;
     display: flex; flex-direction: column;
@@ -195,8 +169,143 @@ const INJECTED_STYLES = `
   }
 
   /* ────────────────────────────────
-     SCENE B: AI Chat / Roast
+     PUSH NOTIFICATION
   ─────────────────────────────────*/
+  .scene-notif {
+    position: absolute;
+    top: 8px; left: 8px; right: 8px;
+    height: 104px;
+    z-index: 20;
+    overflow: hidden;
+    background: var(--card);
+    border: 2px solid var(--foreground);
+    box-shadow: 4px 4px 0 var(--primary);
+  }
+
+  .notif-banner-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px 8px;
+  }
+
+  .notif-app-icon {
+    width: 30px; height: 30px;
+    background: var(--primary);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+
+  .notif-text-col { flex: 1; min-width: 0; }
+
+  .notif-app-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--primary);
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .notif-time {
+    color: var(--muted-foreground);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+  }
+
+  .notif-preview-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(8px, 1.05vw, 10px);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--foreground);
+    line-height: 1.5;
+    /* two-line clamp */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .notif-actions-row {
+    display: flex;
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
+  }
+
+  .notif-action {
+    flex: 1;
+    padding: 8px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    text-align: center;
+    cursor: default;
+  }
+
+  .notif-action.dismiss {
+    color: var(--muted-foreground);
+    border-right: 1px solid var(--border);
+  }
+
+  .notif-action.open {
+    color: var(--primary);
+  }
+
+  /* expanded state inner content */
+  .notif-expanded-content {
+    padding: 12px;
+    border-top: 2px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .notif-expanded-msg {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(9px, 1.1vw, 11px);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--foreground);
+    line-height: 1.6;
+    padding: 10px;
+    background: var(--muted);
+    border: 1px solid var(--border);
+  }
+
+  .notif-expanded-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--primary);
+    margin-bottom: 4px;
+    display: block;
+  }
+
+  .notif-open-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    padding: 10px 16px;
+    background: var(--primary);
+    color: #fff;
+    border: 2px solid var(--foreground);
+    text-align: center;
+    margin-top: 2px;
+  }
+
   .scene-chat {
     position: absolute; inset: 0;
     display: flex; flex-direction: column;
@@ -253,9 +362,6 @@ const INJECTED_STYLES = `
 
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
-  /* ────────────────────────────────
-     SCENE C: Weekly Roast Report
-  ─────────────────────────────────*/
   .scene-report {
     position: absolute; inset: 0;
     display: flex; flex-direction: column;
@@ -313,7 +419,6 @@ const INJECTED_STYLES = `
     letter-spacing: 0.2em;
   }
 
-  /* ── Scene transition flash ── */
   .collapse-void {
     position: absolute; inset: 0;
     background: var(--primary);
@@ -321,9 +426,6 @@ const INJECTED_STYLES = `
     z-index: 10;
   }
 
-  /* ────────────────────────────────
-     BUTTONS
-  ─────────────────────────────────*/
   .streak-btn {
     font-family: 'JetBrains Mono', monospace;
     font-size: 13px;
@@ -365,9 +467,6 @@ const INJECTED_STYLES = `
   }
   .streak-btn-ghost:active { transform: translate(5px,5px); box-shadow: 0 0 0 var(--primary); }
 
-  /* ────────────────────────────────
-     DEMO MODAL
-  ─────────────────────────────────*/
   .demo-overlay {
     position: fixed; inset: 0;
     display: flex; align-items: center; justify-content: center;
@@ -410,9 +509,6 @@ const INJECTED_STYLES = `
   }
   .demo-frame iframe { width: 100%; height: 100%; border: none; }
 
-  /* ────────────────────────────────
-     TICKER
-  ─────────────────────────────────*/
   .ticker-wrap {
     position: absolute;
     bottom: 0; left: 0; right: 0;
@@ -454,9 +550,6 @@ const INJECTED_STYLES = `
     font-family: 'JetBrains Mono', monospace;
   }
 
-  /* ────────────────────────────────
-     COUNTER BAR (card top)
-  ─────────────────────────────────*/
   .counter-bar {
     position: absolute;
     top: 0; left: 0; right: 0;
@@ -498,17 +591,25 @@ const INJECTED_STYLES = `
     50%      { opacity: 0.3; transform: scale(0.7); }
   }
 
-  /* ────────────────────────────────
-     MEDIA QUERIES
-  ─────────────────────────────────*/
   @media (max-width: 1023px) {
     .card-side-text { display: none !important; }
   }
 `;
 
-/* ────────────────────────────────────────────────────────
-   TICKER
-──────────────────────────────────────────────────────── */
+let _landingStylesInjected = false;
+function injectLandingStyles() {
+  if (typeof window === "undefined" || _landingStylesInjected) return;
+  if (document.querySelector("[data-streak-landing-styles]")) {
+    _landingStylesInjected = true;
+    return;
+  }
+  const style = document.createElement("style");
+  style.setAttribute("data-streak-landing-styles", "1");
+  style.textContent = INJECTED_STYLES;
+  document.head.appendChild(style);
+  _landingStylesInjected = true;
+}
+
 const TICKER_ITEMS = [
   "DON'T BREAK THE STREAK",
   "AI COACH IS WATCHING",
@@ -536,9 +637,6 @@ function TickerBar() {
   );
 }
 
-/* ────────────────────────────────────────────────────────
-   PHONE MOCKUP — forwardRef (TS-safe)
-──────────────────────────────────────────────────────── */
 const PhoneMockup = forwardRef<HTMLDivElement>((_, ref) => {
   return (
     <div
@@ -586,6 +684,39 @@ const PhoneMockup = forwardRef<HTMLDivElement>((_, ref) => {
             <div className="habit-check done" />
             <span className="habit-name">No Alcohol</span>
             <span className="habit-streak-num">🔥 42</span>
+          </div>
+        </div>
+
+        {/* ── PUSH NOTIFICATION (slides in over habit list) ── */}
+        <div className="scene-notif" aria-hidden="true">
+          {/* Collapsed banner */}
+          <div className="notif-banner-row">
+            <div className="notif-app-icon">🔥</div>
+            <div className="notif-text-col">
+              <div className="notif-app-label">
+                Streak Coach
+                <span className="notif-time">now</span>
+              </div>
+              <div className="notif-preview-text">
+                It&apos;s 6:35 PM — &quot;Read 30 Min&quot; still unchecked.
+                Don&apos;t make me ask again.
+              </div>
+            </div>
+          </div>
+          <div className="notif-actions-row">
+            <div className="notif-action dismiss">Dismiss</div>
+            <div className="notif-action open">Open Chat →</div>
+          </div>
+
+          {/* Expanded content (visible only when notification grows) */}
+          <div className="notif-expanded-content">
+            <div className="notif-expanded-msg">
+              <span className="notif-expanded-tag">AI Coach · 6:35 PM</span>
+              Two habits still unchecked. You have until midnight. I&apos;m not
+              letting you off easy this time — open the chat or the streak dies
+              tonight.
+            </div>
+            <div className="notif-open-btn">Open Coach Chat →</div>
           </div>
         </div>
 
@@ -643,9 +774,6 @@ const PhoneMockup = forwardRef<HTMLDivElement>((_, ref) => {
 });
 PhoneMockup.displayName = "PhoneMockup";
 
-/* ────────────────────────────────────────────────────────
-   PROPS
-──────────────────────────────────────────────────────── */
 export interface StreakHeroProps extends React.HTMLAttributes<HTMLDivElement> {
   brandName?: string;
   tagline1?: string;
@@ -659,9 +787,6 @@ export interface StreakHeroProps extends React.HTMLAttributes<HTMLDivElement> {
   demoVideoUrl?: string;
 }
 
-/* ────────────────────────────────────────────────────────
-   COMPONENT
-──────────────────────────────────────────────────────── */
 export function StreakHero({
   brandName = "STREAK",
   tagline1 = "Build habits.",
@@ -688,8 +813,10 @@ export function StreakHero({
   const [isDemoOpen, setIsDemoOpen] = useState(false);
   const [isMobileAuthFlow, setIsMobileAuthFlow] = useState(false);
 
-  /* ── GSAP scroll cinematic ── */
   useEffect(() => {
+    injectLandingStyles();
+    ScrollTrigger.killAll();
+
     const isMobile = window.innerWidth < 768;
     const isTouch = ScrollTrigger.isTouch === 1;
 
@@ -723,7 +850,18 @@ export function StreakHero({
       gsap.set(".report-stat", { autoAlpha: 0, x: -12 });
       gsap.set(".report-roast", { autoAlpha: 0, y: 10 });
 
-      /* ── Intro (runs once on load, no scroll) ── */
+      // ── NEW: Notification initial state ──
+      // Starts hidden and above the phone body (slides in from top)
+      gsap.set(".scene-notif", {
+        autoAlpha: 0,
+        y: -90,
+        height: 104,
+        top: 8,
+        left: 8,
+        right: 8,
+      });
+
+      /* ── Intro (no scroll) ── */
       const intro = gsap.timeline({ delay: 0.25 });
       intro
         .to(".hero-tagline-1", {
@@ -739,22 +877,15 @@ export function StreakHero({
           "-=0.65",
         );
 
-      /* ── Main scroll timeline ──
-         KEY FIX: The trigger must be the *scroll spacer* div, not the
-         pinned container itself. We pin the container separately with
-         ScrollTrigger.pin, and drive the animation via the spacer's
-         scroll progress. This avoids the "inner overflow-hidden blocks
-         scroll events" issue.
-      ── */
+      /* ── Main scroll timeline ── */
       const tl = gsap.timeline({
         scrollTrigger: {
           trigger: containerRef.current,
           start: "top top",
-          end: "+=7000",
-          pin: true, // ScrollTrigger adds a spacer div itself
+          end: "+=8500", // slightly longer to give notification sequence breathing room
+          pin: true,
           scrub: 1.2,
           anticipatePin: 1,
-          // Prevent the pinned element's own overflow from eating scroll
           pinSpacing: true,
         },
       });
@@ -766,7 +897,7 @@ export function StreakHero({
           { scale: 1.12, autoAlpha: 0, ease: "power2.in", duration: 1.5 },
           1,
         )
-        /* Card rises from bottom */
+        /* Card rises */
         .to(".main-card", { y: 0, ease: "power3.inOut", duration: 1.5 }, 0)
         .to(".main-card", {
           width: "100%",
@@ -774,7 +905,7 @@ export function StreakHero({
           ease: "power2.inOut",
           duration: 1.2,
         })
-        /* Mockup + panels slide in */
+        /* Mockup + panels */
         .fromTo(
           ".mockup-wrap",
           { y: 180, autoAlpha: 0, scale: 0.75 },
@@ -793,6 +924,7 @@ export function StreakHero({
           { x: 0, autoAlpha: 1, ease: "power2.out", duration: 1.1 },
           "<",
         )
+        /* Scene A: habits appear */
         .to(
           ".scene-a .scene-label",
           { autoAlpha: 1, y: 0, ease: "power2.out", duration: 0.28 },
@@ -832,11 +964,33 @@ export function StreakHero({
           },
           "<+0.02",
         )
-        .to({}, { duration: 0.45 })
+        .to({}, { duration: 0.45 }) // brief hold after habits settle
 
-        /* ── Scene A → B (flash) ── */
+        // ── NEW BLOCK: Push Notification ──────────────────────────────
+        // 1. Notification slides down from above into the phone body
+        .to(".scene-notif", {
+          autoAlpha: 1,
+          y: 0,
+          ease: "back.out(1.3)",
+          duration: 0.5,
+        })
+        .to({}, { duration: 1.1 }) // user "reads" the notification
+
+        // 2. Notification expands to fill the phone body (user taps it)
+        .to(".scene-notif", {
+          height: 600, // large enough to fill; phone-body clips overflow
+          top: 0,
+          left: 0,
+          right: 0,
+          ease: "power2.inOut",
+          duration: 0.55,
+        })
+        .to({}, { duration: 0.35 }) // brief hold on expanded notification
+        // ─────────────────────────────────────────────────────────────
+
+        /* ── Scene A + Notif → B (flash) ── */
         .to(".collapse-void", { autoAlpha: 1, duration: 0.12 })
-        .to(".scene-a", { autoAlpha: 0, duration: 0.01 })
+        .to([".scene-a", ".scene-notif"], { autoAlpha: 0, duration: 0.01 })
         .to(".scene-b", { autoAlpha: 1, duration: 0.01 })
         .to(".collapse-void", { autoAlpha: 0, duration: 0.12 })
         .to(".chat-bubble", {
@@ -903,6 +1057,8 @@ export function StreakHero({
 
     return () => {
       ctx.revert();
+      ScrollTrigger.killAll();
+
       if (isMobile && isTouch) {
         ScrollTrigger.config({ ignoreMobileResize: false });
       }
@@ -931,14 +1087,6 @@ export function StreakHero({
   }, [isDemoOpen]);
 
   return (
-    /*
-     * SCROLL FIX:
-     * – Remove overflow-hidden from the root div. ScrollTrigger needs the
-     *   document-level scroll to flow normally. It manages clipping itself
-     *   via the pin spacer it injects.
-     * – Keep overflow-hidden only on the inner card (.main-card) and
-     *   the phone body (.phone-body) where it's actually needed.
-     */
     <div
       ref={containerRef}
       className={cn(
@@ -947,9 +1095,6 @@ export function StreakHero({
       )}
       {...props}
     >
-      <style dangerouslySetInnerHTML={{ __html: INJECTED_STYLES }} />
-
-      {/* Atmosphere */}
       <div className="film-grain" aria-hidden="true" />
       <div
         className="bg-grid-warm pointer-events-none absolute inset-0 z-0"
@@ -980,7 +1125,7 @@ export function StreakHero({
         </p>
       </div>
 
-      {/* ── CTA (revealed at end of scroll) ── */}
+      {/* ── CTA ── */}
       <div className="cta-wrapper gsap-reveal pointer-events-auto absolute z-10 flex w-full flex-col items-center justify-center px-6 text-center">
         <div
           className="font-streak mb-3 text-xs font-bold uppercase tracking-widest"

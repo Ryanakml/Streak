@@ -214,6 +214,7 @@ export const wipeUserWorkspaceForTesting = mutation({
     if (!user) {
       throw new Error("Seed target user not found");
     }
+    await requireSeedTargetAccess(ctx, user);
     const identity = await ctx.auth.getUserIdentity();
     if (identity && identity.subject !== user.clerkId) {
       throw new Error("Unauthorized");
@@ -230,6 +231,32 @@ export const wipeUserWorkspaceForTesting = mutation({
       email: user.email,
       cleared,
     };
+  },
+});
+
+export const selectiveCleanupUsers = mutation({
+  args: {
+    keepEmail: v.string(),
+    confirmation: v.literal("selective-cleanup-v1"),
+  },
+  handler: async (ctx, args) => {
+    const allUsers = await ctx.db.query("users").collect();
+    const toDelete = allUsers.filter((u) => u.email !== args.keepEmail);
+
+    const results = {
+      usersDeleted: toDelete.length,
+      tablesCleaned: 0,
+    };
+
+    for (const user of toDelete) {
+      // 1. Clean all data associated with this user
+      await clearUserWorkspace(ctx, user._id);
+
+      // 2. Delete the user record itself
+      await ctx.db.delete(user._id);
+    }
+
+    return results;
   },
 });
 
@@ -259,8 +286,7 @@ export const seedTaskReminderSmoke = mutation({
 
     const timezone = user.timezone ?? "UTC";
     const now = Date.now();
-    const today =
-      args.today ?? new Date(now).toISOString().slice(0, 10);
+    const today = args.today ?? new Date(now).toISOString().slice(0, 10);
     const baseTime = args.baseTime ?? "18:00";
 
     const defaultReminderTask = (await ctx.runMutation(
@@ -281,15 +307,18 @@ export const seedTaskReminderSmoke = mutation({
       time: string | null;
     };
 
-    const futureTask = (await ctx.runMutation(internal.agentActions.createTask, {
-      userId: user._id,
-      title: "[Task Smoke] telpon mom",
-      date: today,
-      time: addMinutes(baseTime, 95),
-      source: "manual",
-      reminderOffsetMinutes: 30,
-      now,
-    })) as {
+    const futureTask = (await ctx.runMutation(
+      internal.agentActions.createTask,
+      {
+        userId: user._id,
+        title: "[Task Smoke] telpon mom",
+        date: today,
+        time: addMinutes(baseTime, 95),
+        source: "manual",
+        reminderOffsetMinutes: 30,
+        now,
+      },
+    )) as {
       taskId: Id<"agentTasks">;
       title: string;
       date: string;
@@ -303,11 +332,10 @@ export const seedTaskReminderSmoke = mutation({
       now,
     });
 
-    const taskReminders = (
-      await ctx.db
-        .query("taskReminders")
-        .withIndex("by_user", (q) => q.eq("userId", user._id))
-        .collect()) as Doc<"taskReminders">[];
+    const taskReminders = (await ctx.db
+      .query("taskReminders")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect()) as Doc<"taskReminders">[];
     const dueBefore = toTimestampInTimezone(today, baseTime, timezone);
 
     return {
@@ -316,10 +344,7 @@ export const seedTaskReminderSmoke = mutation({
       timezone,
       today,
       baseTime,
-      tasks: [
-        defaultReminderTask,
-        futureTask,
-      ],
+      tasks: [defaultReminderTask, futureTask],
       reminders: taskReminders.map((reminder) => ({
         id: reminder._id,
         taskId: reminder.taskId,
@@ -358,6 +383,7 @@ export const processTaskReminderSmoke = action({
     if (!user) {
       throw new Error("Seed target user not found");
     }
+    await requireSeedTargetAccess(ctx, user);
 
     const before = args.before ?? Date.now();
     const dueReminders = (await ctx.runQuery(internal.taskReminders.listDue, {
@@ -391,10 +417,14 @@ export const processTaskReminderSmoke = action({
       });
     }
 
-    const messages = (
-      await ctx.runQuery(internal.messages.listByUserForDebug, {
-        userId: user._id,
-      })) as Doc<"messages">[];
+    const messages = (await ctx.runQuery(internal.messages.listByUserForDebug, {
+      userId: user._id,
+    })) as Array<{
+      id: Id<"messages">;
+      createdAt: number;
+      isTaskReminder: boolean;
+      contentOmitted: true;
+    }>;
 
     return {
       userId: user._id,
@@ -403,12 +433,12 @@ export const processTaskReminderSmoke = action({
       processed: deliveries.length,
       deliveries,
       taskReminderMessages: messages
-        .filter((message) => message.intent === "task_reminder")
+        .filter((message) => message.isTaskReminder)
         .slice(-5)
         .map((message) => ({
-          id: message._id,
-          content: message.content,
-          timestamp: message.timestamp,
+          id: message.id,
+          createdAt: message.createdAt,
+          contentOmitted: message.contentOmitted,
         })),
     };
   },

@@ -43,10 +43,7 @@ function resolveTaskDueTimestamp(args: {
   time: string;
   timezone: string;
 }) {
-  return fromZonedTime(
-    `${args.date}T${args.time}:00`,
-    args.timezone,
-  ).getTime();
+  return fromZonedTime(`${args.date}T${args.time}:00`, args.timezone).getTime();
 }
 
 function normalizeOffsetMinutes(offsetMinutes: number) {
@@ -79,10 +76,28 @@ function buildPlaceholder(taskTitle: string) {
   return taskTitle.trim() ? `Oi. ${taskTitle.trim()}.` : "Oi.";
 }
 
-async function getPendingTaskReminderByOffset(ctx: MutationCtx, args: {
-  taskId: Id<"agentTasks">;
-  offsetMinutes: number;
-}) {
+export function buildTaskReminderErrorFallback(
+  languageHint: "indonesian" | "english",
+) {
+  return {
+    chatContent:
+      languageHint === "indonesian"
+        ? "Oi. Maaf, ada kendala koneksi bentar pas mau nyusun kata-kata buat pengingatnya. Tapi intinya jangan lupa ya!"
+        : "Oi. Sorry, having a quick connection hiccup while crafting your reminder. But essentially, don't forget!",
+    pushBody:
+      languageHint === "indonesian"
+        ? "Jangan lupa tugasnya ya!"
+        : "Don't forget your task!",
+  };
+}
+
+async function getPendingTaskReminderByOffset(
+  ctx: MutationCtx,
+  args: {
+    taskId: Id<"agentTasks">;
+    offsetMinutes: number;
+  },
+) {
   const existing = (await ctx.db
     .query("taskReminders")
     .withIndex("by_task_sent", (q) =>
@@ -338,7 +353,7 @@ export const processReminder = internalMutation({
         body: placeholder,
         url: "/dashboard?tab=chat",
         taskId: task._id,
-        rewriteContext: {
+        taskRewriteContext: {
           taskTitle: task.title,
           taskDate: task.date,
           taskTime: task.time,
