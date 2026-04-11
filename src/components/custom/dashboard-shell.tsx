@@ -2881,7 +2881,6 @@ function ChatTab({
   notificationPermission,
   notificationsEnabled,
   notificationPending,
-  billingPending,
   errorMessage,
   input,
   setInput,
@@ -2904,7 +2903,6 @@ function ChatTab({
   notificationPermission: NotificationPermissionState;
   notificationsEnabled: boolean;
   notificationPending: boolean;
-  billingPending: "free" | "pro" | null;
   errorMessage: string | null;
   input: string;
   setInput: (value: string) => void;
@@ -3186,12 +3184,8 @@ function ChatTab({
                 still works. Upgrade if you want more messages right now.
               </p>
               <div className="pt-1">
-                <Button
-                  type="button"
-                  disabled={billingPending !== null}
-                  onClick={() => void onUpgrade()}
-                >
-                  {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
+                <Button type="button" onClick={() => void onUpgrade()}>
+                  Upgrade to Pro
                 </Button>
               </div>
             </div>
@@ -4578,14 +4572,12 @@ function ProfileTab({
   weeklyStats,
   habits,
   checkIns,
-  billingPending,
   aiTogglePending,
   notificationPermission,
   notificationsEnabled,
   notificationPending,
   onEnableNotifications,
   onUpgrade,
-  onDowngrade,
   onToggleAiDisabled,
   theme,
   onToggleTheme,
@@ -4603,14 +4595,12 @@ function ProfileTab({
   weeklyStats: ReturnType<typeof getWeeklyStats>;
   habits: HabitDoc[];
   checkIns: CheckInDoc[];
-  billingPending: "free" | "pro" | null;
   aiTogglePending: boolean;
   notificationPermission: NotificationPermissionState;
   notificationsEnabled: boolean;
   notificationPending: boolean;
   onEnableNotifications: () => Promise<void>;
   onUpgrade: () => Promise<void>;
-  onDowngrade: () => Promise<void>;
   onToggleAiDisabled: () => Promise<void>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
@@ -4684,23 +4674,9 @@ function ProfileTab({
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  disabled={billingPending !== null}
-                  onClick={() => void onUpgrade()}
-                >
-                  {billingPending === "pro" ? "Updating..." : "Upgrade to Pro"}
+                <Button type="button" onClick={() => void onUpgrade()}>
+                  Upgrade to Pro
                 </Button>
-                {IS_DEV_MODE ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={billingPending !== null}
-                    onClick={() => void onDowngrade()}
-                  >
-                    {billingPending === "free" ? "Updating..." : "Downgrade"}
-                  </Button>
-                ) : null}
               </div>
             </section>
 
@@ -4897,9 +4873,6 @@ export function DashboardShell() {
   const [now, setNow] = useState(() => new Date());
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [pendingHabitId, setPendingHabitId] = useState<string | null>(null);
-  const [billingPending, setBillingPending] = useState<"free" | "pro" | null>(
-    null,
-  );
   const [aiTogglePending, setAiTogglePending] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
@@ -5587,35 +5560,8 @@ export function DashboardShell() {
     }
   }
 
-  async function handleBillingChange(nextTier: "free" | "pro") {
-    setBillingPending(nextTier);
-    try {
-      const endpoint =
-        nextTier === "pro" ? "/api/billing/upgrade" : "/api/billing/downgrade";
-
-      const response = await fetch(endpoint, { method: "POST" });
-      if (!response.ok) {
-        throw new Error("Billing update failed");
-      }
-
-      await user?.reload();
-      await refreshDailyMessageBudget().catch(() => undefined);
-    } finally {
-      setBillingPending(null);
-    }
-  }
-
   async function handleUpgrade() {
-    if (IS_DEV_MODE) {
-      await handleBillingChange("pro");
-      return;
-    }
-
     router.push("/plans");
-  }
-
-  async function handleDowngrade() {
-    await handleBillingChange("free");
   }
 
   async function handleToggleAiDisabled() {
@@ -5725,7 +5671,6 @@ export function DashboardShell() {
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationPending={notificationPending}
-            billingPending={billingPending}
             errorMessage={chatErrorMessage}
             input={chatInput}
             setInput={setChatInput}
@@ -5761,14 +5706,12 @@ export function DashboardShell() {
             weeklyStats={weeklyStats}
             habits={resolvedHabits}
             checkIns={resolvedAllCheckIns}
-            billingPending={billingPending}
             aiTogglePending={aiTogglePending}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationPending={notificationPending}
             onEnableNotifications={handleEnableNotifications}
             onUpgrade={handleUpgrade}
-            onDowngrade={handleDowngrade}
             onToggleAiDisabled={handleToggleAiDisabled}
             theme={theme}
             onToggleTheme={toggleTheme}
