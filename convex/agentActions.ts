@@ -108,7 +108,7 @@ function getPreviousScheduledDate(dateKey: string, targetDays: string[]) {
   return null;
 }
 
-function computeStreakMetrics(args: {
+export function computeStreakMetrics(args: {
   habit: Doc<"habits">;
   checkIns: Doc<"checkIns">[];
 }) {
@@ -179,6 +179,13 @@ function minutesToTime(totalMinutes: number) {
     .padStart(2, "0");
   const minutes = (normalized % 60).toString().padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function isTimeKey(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
 function formatDuration(totalMinutes: number) {
@@ -267,7 +274,9 @@ function buildPlannerTiming(args: {
       ...base,
       timingState: "unscheduled" as const,
       timingNote:
-        args.itemType === "task" ? "butuh jam yang jelas" : "belum punya slot yang jelas",
+        args.itemType === "task"
+          ? "butuh jam yang jelas"
+          : "belum punya slot yang jelas",
     };
   }
 
@@ -304,7 +313,9 @@ function buildPlannerTiming(args: {
     return {
       ...base,
       timingState:
-        minutesUntilScheduled <= 60 ? ("due_soon" as const) : ("upcoming" as const),
+        minutesUntilScheduled <= 60
+          ? ("due_soon" as const)
+          : ("upcoming" as const),
       timingNote: `mulai ${formatDuration(minutesUntilScheduled)} lagi`,
       minutesUntilScheduled,
       minutesUntilDeadline,
@@ -364,11 +375,7 @@ function shiftScheduleTimes(args: {
   };
 }
 
-function getScheduleForDay(habit: Doc<"habits">, dayKey: string) {
-  if (dayKey === "fri" && habit.schedules?.fri) {
-    return habit.schedules.fri;
-  }
-
+function getScheduleForDay(habit: Doc<"habits">) {
   return {
     scheduledTime: habit.scheduledTime,
     reminderTime: habit.reminderTime,
@@ -448,7 +455,8 @@ function compareTasksDesc(
 
 function comparePlannerItems(left: PlannerItem, right: PlannerItem) {
   if (left.scheduledTime && right.scheduledTime) {
-    const delta = timeToMinutes(left.scheduledTime) - timeToMinutes(right.scheduledTime);
+    const delta =
+      timeToMinutes(left.scheduledTime) - timeToMinutes(right.scheduledTime);
     if (delta !== 0) {
       return delta;
     }
@@ -487,7 +495,11 @@ function findConflictMap(items: PlannerItem[]) {
     const current = timedPendingItems[index];
     const currentMinutes = timeToMinutes(current.scheduledTime!);
 
-    for (let nextIndex = index + 1; nextIndex < timedPendingItems.length; nextIndex += 1) {
+    for (
+      let nextIndex = index + 1;
+      nextIndex < timedPendingItems.length;
+      nextIndex += 1
+    ) {
       const next = timedPendingItems[nextIndex];
       const nextMinutes = timeToMinutes(next.scheduledTime!);
 
@@ -569,10 +581,7 @@ function rankRiskScore(args: {
   return score;
 }
 
-async function loadPlannerState(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-) {
+async function loadPlannerState(ctx: QueryCtx, userId: Id<"users">) {
   const user = await ctx.db.get(userId);
   if (!user) {
     throw new Error("User not found");
@@ -585,6 +594,7 @@ async function loadPlannerState(
     allSkips,
     allReminderRuns,
     allTasks,
+    recentEpisodes,
   ] = await Promise.all([
     ctx.db
       .query("habits")
@@ -610,17 +620,60 @@ async function loadPlannerState(
       .query("agentTasks")
       .withIndex("by_user_date", (q) => q.eq("userId", userId))
       .collect(),
+    ctx.db
+      .query("agentEpisodes")
+      .withIndex("by_user_date", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(500),
   ]);
+  const habits = (activeHabits as Doc<"habits">[]).filter(
+    (habit) => habit.isActive,
+  );
+  const scheduleBaselines = new Map<Id<"habits">, number>();
+  for (const habit of habits) {
+    scheduleBaselines.set(habit._id, habit.scheduleUpdatedAt ?? 0);
+  }
+
+  const scheduleOverrides = new Map<string, string>();
+  for (const episode of recentEpisodes) {
+    if (episode.type !== "schedule_changed" || !episode.habitId) {
+      continue;
+    }
+    const baseline = scheduleBaselines.get(episode.habitId) ?? 0;
+    if (episode._creationTime < baseline) {
+      continue;
+    }
+    const metadata =
+      episode.metadata && typeof episode.metadata === "object"
+        ? (episode.metadata as Record<string, unknown>)
+        : null;
+    const targetDate =
+      metadata && typeof metadata.targetDate === "string"
+        ? metadata.targetDate
+        : null;
+    const targetTime =
+      metadata && typeof metadata.targetTime === "string"
+        ? metadata.targetTime
+        : null;
+    if (!targetDate || !targetTime || !isTimeKey(targetTime)) {
+      continue;
+    }
+    const key = `${episode.habitId}:${targetDate}`;
+    if (!scheduleOverrides.has(key)) {
+      scheduleOverrides.set(key, targetTime);
+    }
+  }
 
   return {
     user,
     timezone: getTimezone(user),
-    habits: (activeHabits as Doc<"habits">[]).filter((habit) => habit.isActive),
+    habits,
     checkIns: allCheckIns as Doc<"checkIns">[],
     reminders: allReminders as Doc<"reminders">[],
     skips: allSkips as Doc<"habitSkips">[],
     reminderRuns: allReminderRuns as Doc<"reminderRuns">[],
     tasks: (allTasks as Doc<"agentTasks">[]).sort(compareTasksDesc),
+    scheduleOverrides,
   };
 }
 
@@ -636,108 +689,125 @@ function buildPlanForDate(args: {
   const nowMinutes = timeToMinutes(
     formatInTimeZone(new Date(args.now), args.state.timezone, "HH:mm"),
   );
-  const checkInsForDate = args.state.checkIns.filter((entry) => entry.date === args.date);
-  const remindersForDate = args.state.reminders.filter((entry) => entry.date === args.date);
-  const skipsForDate = args.state.skips.filter((entry) => entry.date === args.date);
+  const checkInsForDate = args.state.checkIns.filter(
+    (entry) => entry.date === args.date,
+  );
+  const remindersForDate = args.state.reminders.filter(
+    (entry) => entry.date === args.date,
+  );
+  const skipsForDate = args.state.skips.filter(
+    (entry) => entry.date === args.date,
+  );
   const reminderRunsForDate = args.state.reminderRuns.filter(
     (entry) => entry.date === args.date,
   );
 
-  const habitItems = args.state.habits
-    .map((habit) => {
-      const schedule = getScheduleForDay(habit, dayKey);
-      const checkIn =
-        checkInsForDate.find((entry) => entry.habitId === habit._id) ?? null;
-      const skip =
-        skipsForDate.find((entry) => entry.habitId === habit._id) ?? null;
-      const reminders = remindersForDate.filter(
-        (entry) => entry.habitId === habit._id,
-      );
-      const reminderRun =
-        reminderRunsForDate.find((entry) => entry.habitId === habit._id) ?? null;
-      const recentHabitCheckIns = args.state.checkIns
-        .filter((entry) => entry.habitId === habit._id)
-        .sort(compareCheckInsDesc);
-      const checkInsLast7d = recentHabitCheckIns.filter(
-        (entry) => entry.date >= date7dStart && entry.date <= args.date,
-      );
-      const missedLast7d = checkInsLast7d.filter(
-        (entry) => entry.status === "missed",
-      ).length;
-      const completedLast7d = checkInsLast7d.filter(
-        (entry) => entry.status === "completed",
-      ).length;
-      const isToday = args.date === todayDate;
-      const baseRiskNote = buildRiskNote({
-        currentStreak: habit.currentStreak,
-        missedLast7d,
-        completedLast7d,
-        skipExists: Boolean(skip),
-        reminderRunState: reminderRun?.state ?? null,
-      });
-
-      let status: PlannerItemStatus = "pending";
-      if (skip) {
-        status = "skipped";
-      } else if (checkIn?.status) {
-        status = checkIn.status;
-      } else if (reminderRun?.state === "rescheduled") {
-        status = "rescheduled";
-      } else if (reminderRun?.state === "missed") {
-        status = "missed";
-      } else if (reminderRun?.state === "completed") {
-        status = "completed";
-      }
-
-      const item = {
-        itemType: "habit" as const,
-        itemId: habit._id,
-        title: habit.name,
-        scheduledTime: schedule.scheduledTime,
-        status,
-        riskNote:
-          isToday && reminders.some((entry) => !entry.sent)
-            ? `${baseRiskNote}; reminder still pending`
-            : baseRiskNote,
-        conflictWith: [],
-        itemDate: args.date,
-        ...buildPlannerTiming({
-          itemType: "habit",
-          itemDate: args.date,
-          todayDate,
-          status,
-          scheduledTime: schedule.scheduledTime,
-          deadlineTime: schedule.checkInDeadline,
-          nowMinutes,
-        }),
-        skipped: Boolean(skip),
-        skipReason: skip?.reason ?? null,
-        checkInStatus: checkIn?.status ?? null,
-        reminderState: reminderRun?.state ?? null,
-        reminderStatus: isToday
-          ? {
-              pendingTypes: reminders
-                .filter((entry) => !entry.sent)
-                .map((entry) => entry.type) as ReminderType[],
-              sentTypes: reminders
-                .filter((entry) => entry.sent)
-                .map((entry) => entry.type) as ReminderType[],
-            }
-          : null,
-      };
-
-      return {
-        item,
-        isRelevant: isHabitRelevantForDate({
-          habit,
-          dayKey,
-          checkIn,
-          skip,
-          reminderRun,
-          reminders,
-        }),
-      };
+  const habitItems = args.state.habits.map((habit) => {
+    const baseSchedule = getScheduleForDay(habit);
+    const scheduleOverride = args.state.scheduleOverrides.get(
+      `${habit._id}:${args.date}`,
+    );
+    const schedule =
+      scheduleOverride && isTimeKey(scheduleOverride)
+        ? shiftScheduleTimes({
+            scheduledTime: baseSchedule.scheduledTime,
+            reminderTime: baseSchedule.reminderTime,
+            checkInDeadline: baseSchedule.checkInDeadline,
+            nextScheduledTime: scheduleOverride,
+          })
+        : baseSchedule;
+    const checkIn =
+      checkInsForDate.find((entry) => entry.habitId === habit._id) ?? null;
+    const skip =
+      skipsForDate.find((entry) => entry.habitId === habit._id) ?? null;
+    const reminders = remindersForDate.filter(
+      (entry) => entry.habitId === habit._id,
+    );
+    const reminderRun =
+      reminderRunsForDate.find((entry) => entry.habitId === habit._id) ?? null;
+    const recentHabitCheckIns = args.state.checkIns
+      .filter((entry) => entry.habitId === habit._id)
+      .sort(compareCheckInsDesc);
+    const checkInsLast7d = recentHabitCheckIns.filter(
+      (entry) => entry.date >= date7dStart && entry.date <= args.date,
+    );
+    const missedLast7d = checkInsLast7d.filter(
+      (entry) => entry.status === "missed",
+    ).length;
+    const completedLast7d = checkInsLast7d.filter(
+      (entry) => entry.status === "completed",
+    ).length;
+    const isToday = args.date === todayDate;
+    const baseRiskNote = buildRiskNote({
+      currentStreak: habit.currentStreak,
+      missedLast7d,
+      completedLast7d,
+      skipExists: Boolean(skip),
+      reminderRunState: reminderRun?.state ?? null,
     });
+
+    let status: PlannerItemStatus = "pending";
+    if (skip) {
+      status = "skipped";
+    } else if (checkIn?.status) {
+      status = checkIn.status;
+    } else if (reminderRun?.state === "rescheduled") {
+      status = "rescheduled";
+    } else if (reminderRun?.state === "missed") {
+      status = "missed";
+    } else if (reminderRun?.state === "completed") {
+      status = "completed";
+    }
+
+    const item = {
+      itemType: "habit" as const,
+      itemId: habit._id,
+      title: habit.name,
+      scheduledTime: schedule.scheduledTime,
+      status,
+      riskNote:
+        isToday && reminders.some((entry) => !entry.sent)
+          ? `${baseRiskNote}; reminder still pending`
+          : baseRiskNote,
+      conflictWith: [],
+      itemDate: args.date,
+      ...buildPlannerTiming({
+        itemType: "habit",
+        itemDate: args.date,
+        todayDate,
+        status,
+        scheduledTime: schedule.scheduledTime,
+        deadlineTime: schedule.checkInDeadline,
+        nowMinutes,
+      }),
+      skipped: Boolean(skip),
+      skipReason: skip?.reason ?? null,
+      checkInStatus: checkIn?.status ?? null,
+      reminderState: reminderRun?.state ?? null,
+      reminderStatus: isToday
+        ? {
+            pendingTypes: reminders
+              .filter((entry) => !entry.sent)
+              .map((entry) => entry.type) as ReminderType[],
+            sentTypes: reminders
+              .filter((entry) => entry.sent)
+              .map((entry) => entry.type) as ReminderType[],
+          }
+        : null,
+    };
+
+    return {
+      item,
+      isRelevant: isHabitRelevantForDate({
+        habit,
+        dayKey,
+        checkIn,
+        skip,
+        reminderRun,
+        reminders,
+      }),
+    };
+  });
   const filteredHabitItems = habitItems
     .filter((entry) => entry.isRelevant)
     .map((entry) => entry.item);
@@ -794,7 +864,9 @@ async function getExistingCheckInForHabit(args: {
     )
     .collect()) as Doc<"checkIns">[];
 
-  return existingForDate.find((entry) => entry.habitId === args.habitId) ?? null;
+  return (
+    existingForDate.find((entry) => entry.habitId === args.habitId) ?? null
+  );
 }
 
 export const getPendingActionForUser = internalQuery({
@@ -888,12 +960,12 @@ export const executeLogCompletion = internalMutation({
 
     let workoutLogId: Id<"workoutLogs"> | undefined;
     if (args.workout && args.workout.exercises.length > 0) {
-      const existingWorkoutLog = ((await ctx.db
-        .query("workoutLogs")
-        .withIndex("by_habit", (q) => q.eq("habitId", args.habitId))
-        .collect()) as Doc<"workoutLogs">[]).find(
-        (entry) => entry.checkInId === checkInId,
-      );
+      const existingWorkoutLog = (
+        (await ctx.db
+          .query("workoutLogs")
+          .withIndex("by_habit", (q) => q.eq("habitId", args.habitId))
+          .collect()) as Doc<"workoutLogs">[]
+      ).find((entry) => entry.checkInId === checkInId);
 
       if (existingWorkoutLog) {
         workoutLogId = existingWorkoutLog._id;
@@ -999,7 +1071,9 @@ export const upsertPendingAction = internalMutation({
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
 
-    const latest = existing.sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    const latest = existing.sort(
+      (left, right) => right.updatedAt - left.updatedAt,
+    )[0];
     if (latest) {
       await ctx.db.patch(latest._id, {
         messageId: args.messageId,
@@ -1094,42 +1168,54 @@ export const executeRescheduleHabitTime = internalMutation({
       };
     }
 
-    if (dayKey === "fri") {
-      const baseSchedule = getScheduleForDay(habit, dayKey);
-      const shifted = shiftScheduleTimes({
-        scheduledTime: baseSchedule.scheduledTime,
-        reminderTime: baseSchedule.reminderTime,
-        checkInDeadline: baseSchedule.checkInDeadline,
-        nextScheduledTime: args.targetTime,
-      });
-
-      await ctx.db.patch(args.habitId, {
-        schedules: {
-          ...habit.schedules,
-          fri: shifted,
-        },
-      });
-    } else {
-      const shifted = shiftScheduleTimes({
-        scheduledTime: habit.scheduledTime,
-        reminderTime: habit.reminderTime,
-        checkInDeadline: habit.checkInDeadline,
-        nextScheduledTime: args.targetTime,
-      });
-
-      await ctx.db.patch(args.habitId, shifted);
+    const timezone = getTimezone(user);
+    const nowDate = getDateKey(new Date(), timezone);
+    const nowLocalTime = formatInTimeZone(new Date(), timezone, "HH:mm");
+    if (args.targetDate < nowDate) {
+      return {
+        status: "no_op" as const,
+        reason: "target_date_in_past" as const,
+        habitId: args.habitId,
+        habitName: habit.name,
+        targetDate: args.targetDate,
+        targetTime: args.targetTime,
+        dayKey,
+      };
     }
+    if (args.targetDate === nowDate && args.targetTime <= nowLocalTime) {
+      return {
+        status: "no_op" as const,
+        reason: "target_time_in_past" as const,
+        habitId: args.habitId,
+        habitName: habit.name,
+        targetDate: args.targetDate,
+        targetTime: args.targetTime,
+        dayKey,
+      };
+    }
+
+    await ctx.db.insert("agentEpisodes", {
+      userId: args.userId,
+      habitId: args.habitId,
+      date: args.targetDate,
+      type: "schedule_changed",
+      summary: `${habit.name} rescheduled to ${args.targetTime} for ${args.targetDate}.`,
+      metadata: {
+        targetDate: args.targetDate,
+        targetTime: args.targetTime,
+      },
+      createdAt: Date.now(),
+    });
 
     await ctx.scheduler.runAfter(0, internal.reminders.refreshForHabit, {
       habitId: args.habitId,
     });
 
-    const updatedHabit = await ctx.db.get(args.habitId);
     return {
       status: "executed" as const,
       reason: null,
       habitId: args.habitId,
-      habitName: updatedHabit?.name ?? habit.name,
+      habitName: habit.name,
       targetDate: args.targetDate,
       targetTime: args.targetTime,
       dayKey,
@@ -1211,7 +1297,9 @@ export const createTask = internalMutation({
     userId: v.id("users"),
     title: v.string(),
     date: v.string(),
-    time: v.optional(v.string()),
+    time: v.string(),
+    source: v.optional(v.union(v.literal("chat"), v.literal("manual"))),
+    reminderOffsetMinutes: v.optional(v.number()),
     now: v.number(),
   },
   handler: async (ctx, args) => {
@@ -1223,7 +1311,10 @@ export const createTask = internalMutation({
     const existing = (await ctx.db
       .query("agentTasks")
       .withIndex("by_user_date_status", (q) =>
-        q.eq("userId", args.userId).eq("date", args.date).eq("status", "pending"),
+        q
+          .eq("userId", args.userId)
+          .eq("date", args.date)
+          .eq("status", "pending"),
       )
       .collect()) as Doc<"agentTasks">[];
 
@@ -1231,7 +1322,7 @@ export const createTask = internalMutation({
       existing.find(
         (task) =>
           task.title.toLowerCase() === normalizedTitle.toLowerCase() &&
-          (task.time ?? null) === (args.time ?? null),
+          task.time === args.time,
       ) ?? null;
 
     if (duplicate) {
@@ -1250,9 +1341,17 @@ export const createTask = internalMutation({
       date: args.date,
       time: args.time,
       status: "pending",
-      source: "chat",
+      source: args.source ?? "chat",
       createdAt: args.now,
       updatedAt: args.now,
+    });
+
+    await ctx.runMutation(internal.taskReminders.scheduleReminderForTask, {
+      taskId,
+      userId: args.userId,
+      offsetMinutes: args.reminderOffsetMinutes ?? 30,
+      source: args.source === "manual" ? "manual" : "default",
+      now: args.now,
     });
 
     return {
@@ -1260,7 +1359,169 @@ export const createTask = internalMutation({
       taskId,
       title: normalizedTitle,
       date: args.date,
-      time: args.time ?? null,
+      time: args.time,
+    };
+  },
+});
+
+export const executeRescheduleTaskTime = internalMutation({
+  args: {
+    userId: v.id("users"),
+    taskId: v.id("agentTasks"),
+    targetDate: v.string(),
+    targetTime: v.string(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.userId !== args.userId) {
+      throw new Error("Task not found");
+    }
+
+    if (task.status !== "pending") {
+      return {
+        status: "no_op" as const,
+        taskId: task._id,
+        title: task.title,
+        date: task.date,
+        time: task.time ?? null,
+      };
+    }
+
+    const nextTime = args.targetTime;
+    const unchanged = task.date === args.targetDate && task.time === nextTime;
+    if (unchanged) {
+      return {
+        status: "no_op" as const,
+        taskId: task._id,
+        title: task.title,
+        date: task.date,
+        time: task.time ?? null,
+      };
+    }
+
+    await ctx.db.patch(task._id, {
+      date: args.targetDate,
+      time: nextTime,
+      updatedAt: args.now,
+    });
+
+    await ctx.runMutation(internal.taskReminders.shiftPendingRemindersForTask, {
+      taskId: task._id,
+      userId: args.userId,
+      targetDate: args.targetDate,
+      targetTime: nextTime,
+      now: args.now,
+    });
+
+    const updatedTask = await ctx.db.get(task._id);
+    return {
+      status: "executed" as const,
+      taskId: task._id,
+      title: updatedTask?.title ?? task.title,
+      date: updatedTask?.date ?? args.targetDate,
+      time: updatedTask?.time ?? nextTime,
+    };
+  },
+});
+
+export const markTaskDone = internalMutation({
+  args: {
+    userId: v.id("users"),
+    taskId: v.id("agentTasks"),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.userId !== args.userId) {
+      throw new Error("Task not found");
+    }
+
+    if (task.status === "done") {
+      return {
+        status: "no_op" as const,
+        taskId: task._id,
+        title: task.title,
+        doneAt: task.doneAt ?? null,
+      };
+    }
+
+    await ctx.db.patch(task._id, {
+      status: "done",
+      doneAt: args.now,
+      updatedAt: args.now,
+    });
+
+    await ctx.runMutation(internal.taskReminders.clearPendingForTask, {
+      taskId: task._id,
+    });
+    await ctx.scheduler.runAfter(
+      60 * 60 * 1000,
+      internal.taskReminders.deleteTaskIfDone,
+      {
+        taskId: task._id,
+      },
+    );
+
+    return {
+      status: "executed" as const,
+      taskId: task._id,
+      title: task.title,
+      doneAt: args.now,
+    };
+  },
+});
+
+export const addTaskReminder = internalMutation({
+  args: {
+    userId: v.id("users"),
+    taskId: v.id("agentTasks"),
+    offsetMinutes: v.number(),
+    now: v.number(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    status: "executed" | "no_op";
+    taskId: Id<"agentTasks">;
+    title: string;
+    scheduledFor: number | null;
+    offsetMinutes: number;
+  }> => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.userId !== args.userId) {
+      throw new Error("Task not found");
+    }
+
+    if (task.status !== "pending") {
+      return {
+        status: "no_op" as const,
+        taskId: task._id,
+        title: task.title,
+        scheduledFor: null,
+        offsetMinutes: args.offsetMinutes,
+      };
+    }
+
+    const reminder: {
+      status: "executed" | "no_op";
+      reminderId: Id<"taskReminders"> | null;
+      scheduledFor: number | null;
+    } = await ctx.runMutation(internal.taskReminders.scheduleReminderForTask, {
+      taskId: task._id,
+      userId: args.userId,
+      offsetMinutes: args.offsetMinutes,
+      source: "chat",
+      now: args.now,
+    });
+
+    return {
+      status: reminder.status,
+      taskId: task._id,
+      title: task.title,
+      scheduledFor: reminder.scheduledFor,
+      offsetMinutes: args.offsetMinutes,
     };
   },
 });

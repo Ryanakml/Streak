@@ -22,8 +22,11 @@ const CHAT_INTENTS = [
   "log_completion",
   "log_miss",
   "reschedule_habit_time",
+  "reschedule_task_time",
   "skip_habit_for_date",
   "create_task",
+  "mark_task_done",
+  "add_task_reminder",
   "ask_today_plan",
   "ask_tomorrow_plan",
   "risk_scan",
@@ -112,8 +115,11 @@ type OperationalIntent =
   | "log_completion"
   | "log_miss"
   | "reschedule_habit_time"
+  | "reschedule_task_time"
   | "skip_habit_for_date"
   | "create_task"
+  | "mark_task_done"
+  | "add_task_reminder"
   | "ask_today_plan"
   | "ask_tomorrow_plan"
   | "risk_scan"
@@ -123,8 +129,11 @@ type RequiredAction =
   | "log_completion"
   | "log_miss"
   | "reschedule_habit_time"
+  | "reschedule_task_time"
   | "skip_habit_for_date"
   | "create_task"
+  | "mark_task_done"
+  | "add_task_reminder"
   | "ask_today_plan"
   | "ask_tomorrow_plan"
   | "risk_scan"
@@ -137,11 +146,13 @@ type OperationalRoute = {
   targetDate: string | null;
   targetTime: string | null;
   taskTitle: string | null;
+  taskId: Id<"agentTasks"> | null;
+  reminderOffsetMinutes: number | null;
   resolvedHabit: Doc<"habits"> | null;
   needsClarification: boolean;
   clarificationQuestion: string | null;
   missingFields: string[];
-  payload: Record<string, string | null>;
+  payload: Record<string, string | number | null>;
 };
 
 type OperationalExtractionResult = {
@@ -150,6 +161,8 @@ type OperationalExtractionResult = {
   targetDate: string | null;
   targetTime: string | null;
   taskTitle: string | null;
+  taskId: Id<"agentTasks"> | null;
+  reminderOffsetMinutes: number | null;
   continuePendingAction: boolean;
   supersedePendingAction: boolean;
   clarificationQuestion: string | null;
@@ -335,6 +348,7 @@ type ChatContext = {
   todayCheckIns: Doc<"checkIns">[];
   recentMessages: MessageSnapshot[];
   recentCheckIns: Doc<"checkIns">[];
+  recentTasks: Doc<"agentTasks">[];
   recentAgentEpisodes: Doc<"agentEpisodes">[];
   agentMemories: Doc<"agentMemory">[];
   relevantEpisodes: Array<{
@@ -361,6 +375,10 @@ function coerceString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function coerceFiniteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function isDateKey(value: string | null) {
   return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 }
@@ -372,6 +390,51 @@ function isTimeKey(value: string | null) {
 function timeToMinutes(time: string) {
   const [hours, minutes] = time.split(":").map((part) => Number(part));
   return hours * 60 + minutes;
+}
+
+function minutesToTime(totalMinutes: number) {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const hours = Math.floor(normalized / 60)
+    .toString()
+    .padStart(2, "0");
+  const minutes = (normalized % 60).toString().padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function shiftScheduleTimes(args: {
+  scheduledTime: string;
+  reminderTime: string;
+  checkInDeadline: string;
+  nextScheduledTime: string;
+}) {
+  const scheduledMinutes = timeToMinutes(args.scheduledTime);
+  const reminderOffset = timeToMinutes(args.reminderTime) - scheduledMinutes;
+  const deadlineOffset = timeToMinutes(args.checkInDeadline) - scheduledMinutes;
+  const nextScheduledMinutes = timeToMinutes(args.nextScheduledTime);
+
+  return {
+    scheduledTime: args.nextScheduledTime,
+    reminderTime: minutesToTime(nextScheduledMinutes + reminderOffset),
+    checkInDeadline: minutesToTime(nextScheduledMinutes + deadlineOffset),
+  };
+}
+
+function extractReminderOffsetMinutes(content: string) {
+  const lowered = content.toLowerCase();
+  const minuteMatch = lowered.match(/(\d+)\s*(menit|minute|minutes|min|m)\b/);
+  if (minuteMatch) {
+    return Math.max(0, Number(minuteMatch[1]));
+  }
+
+  if (
+    lowered.includes("setengah jam") ||
+    lowered.includes("half hour") ||
+    lowered.includes("30 menit")
+  ) {
+    return 30;
+  }
+
+  return null;
 }
 
 function formatDuration(totalMinutes: number) {
@@ -394,16 +457,49 @@ function isHabitScheduledOnDay(habit: Doc<"habits"> | null, dayKey: string) {
   return Boolean(habit && habit.targetDays.includes(dayKey));
 }
 
-function getHabitScheduleForDay(habit: Doc<"habits">, dayKey: string) {
-  if (dayKey === "fri" && habit.schedules?.fri) {
-    return habit.schedules.fri;
-  }
-
+function getHabitScheduleForDay(habit: Doc<"habits">) {
   return {
     scheduledTime: habit.scheduledTime,
     reminderTime: habit.reminderTime,
     checkInDeadline: habit.checkInDeadline,
   };
+}
+
+function getRescheduledTimeFromRecentEpisodes(args: {
+  episodes: Doc<"agentEpisodes">[];
+  habitId: Id<"habits">;
+  date: string;
+  scheduleBaseline: number;
+}) {
+  for (const episode of args.episodes) {
+    if (episode.type !== "schedule_changed") {
+      continue;
+    }
+    if (episode.habitId !== args.habitId) {
+      continue;
+    }
+    const episodeTs = episode.createdAt ?? episode._creationTime;
+    if (episodeTs < args.scheduleBaseline) {
+      continue;
+    }
+    const metadata =
+      episode.metadata && typeof episode.metadata === "object"
+        ? (episode.metadata as Record<string, unknown>)
+        : null;
+    const targetDate =
+      metadata && typeof metadata.targetDate === "string"
+        ? metadata.targetDate
+        : null;
+    const targetTime =
+      metadata && typeof metadata.targetTime === "string"
+        ? metadata.targetTime
+        : null;
+    if (targetDate === args.date && isTimeKey(targetTime)) {
+      return targetTime;
+    }
+  }
+
+  return null;
 }
 
 function summarizeCurrentTimeContext(context: ChatContext) {
@@ -426,7 +522,22 @@ function buildHabitTimeContext(
     return null;
   }
 
-  const schedule = getHabitScheduleForDay(habit, context.todayDayKey);
+  const baseSchedule = getHabitScheduleForDay(habit);
+  const rescheduledTime = getRescheduledTimeFromRecentEpisodes({
+    episodes: context.recentAgentEpisodes,
+    habitId: habit._id,
+    date: context.date,
+    scheduleBaseline: habit.scheduleUpdatedAt ?? 0,
+  });
+  const schedule =
+    rescheduledTime && isTimeKey(rescheduledTime)
+      ? shiftScheduleTimes({
+          scheduledTime: baseSchedule.scheduledTime,
+          reminderTime: baseSchedule.reminderTime,
+          checkInDeadline: baseSchedule.checkInDeadline,
+          nextScheduledTime: rescheduledTime,
+        })
+      : baseSchedule;
   const existingCheckIn =
     context.todayCheckIns.find((entry) => entry.habitId === habit._id) ?? null;
   const scheduledToday = habit.targetDays.includes(context.todayDayKey);
@@ -609,12 +720,60 @@ function summarizeStatSignal(summary: HabitPerformanceSummary | null) {
   return null;
 }
 
-function getPrimaryQuestionSignal(args: {
+function buildScheduleFactSignal(args: {
   decision: ChatDecision;
   context: ChatContext;
+  resolvedHabit: Doc<"habits"> | null;
+  resolvedHabitTimeContext: ReturnType<typeof buildHabitTimeContext>;
+  todayHabit: Doc<"habits"> | null;
+  todayHabitTimeContext: ReturnType<typeof buildHabitTimeContext>;
 }) {
   if (args.decision.mode !== "question") {
     return null;
+  }
+
+  if (args.decision.questionFocus !== "schedule") {
+    return null;
+  }
+
+  const targetHabit = args.resolvedHabit ?? args.todayHabit;
+  const targetTiming =
+    args.resolvedHabitTimeContext ?? args.todayHabitTimeContext;
+  if (!targetHabit || !targetTiming) {
+    return null;
+  }
+
+  if (
+    !targetTiming.scheduledToday ||
+    targetTiming.state === "not_scheduled_today"
+  ) {
+    return `${targetHabit.name} tidak terjadwal hari ini.`;
+  }
+
+  const reminderStatus = getHabitReminderStatus(args.context, targetHabit._id);
+  const pendingLabel =
+    reminderStatus && reminderStatus.pendingTypes.length > 0
+      ? reminderStatus.pendingTypes.join(",")
+      : "none";
+  const sentLabel =
+    reminderStatus && reminderStatus.sentTypes.length > 0
+      ? reminderStatus.sentTypes.join(",")
+      : "none";
+
+  return `${targetHabit.name} jadwal ${targetTiming.scheduledTime}, deadline ${targetTiming.checkInDeadline}, reminder pending ${pendingLabel}, sent ${sentLabel}.`;
+}
+
+function getPrimaryQuestionSignal(args: {
+  decision: ChatDecision;
+  context: ChatContext;
+  scheduleFactSignal: string | null;
+}) {
+  if (args.decision.mode !== "question") {
+    return null;
+  }
+
+  if (args.decision.questionFocus === "schedule") {
+    return args.scheduleFactSignal;
   }
 
   if (args.decision.questionFocus === "pattern") {
@@ -669,6 +828,10 @@ function getSupportingQuestionSignal(args: {
   context: ChatContext;
 }) {
   if (args.decision.mode !== "question") {
+    return null;
+  }
+
+  if (args.decision.questionFocus === "schedule") {
     return null;
   }
 
@@ -740,7 +903,12 @@ function getResolvedReturnMode(args: {
     args.resolvedTurn.kind === "operational_execution" ||
     args.resolvedTurn.kind === "operational_clarification"
   ) {
-    if (args.resolvedTurn.requiredAction === "create_task") {
+    if (
+      args.resolvedTurn.requiredAction === "create_task" ||
+      args.resolvedTurn.requiredAction === "reschedule_task_time" ||
+      args.resolvedTurn.requiredAction === "mark_task_done" ||
+      args.resolvedTurn.requiredAction === "add_task_reminder"
+    ) {
       return "task_update";
     }
 
@@ -999,7 +1167,12 @@ function getOperationalTargetType(actionType: string | null | undefined) {
     return "plan";
   }
 
-  if (actionType === "create_task") {
+  if (
+    actionType === "create_task" ||
+    actionType === "reschedule_task_time" ||
+    actionType === "mark_task_done" ||
+    actionType === "add_task_reminder"
+  ) {
     return "task";
   }
 
@@ -1340,8 +1513,11 @@ function normalizeOperationalSafetyCheck(value: unknown) {
   return {
     correctedIntent:
       correctedIntent === "reschedule_habit_time" ||
+      correctedIntent === "reschedule_task_time" ||
       correctedIntent === "skip_habit_for_date" ||
       correctedIntent === "create_task" ||
+      correctedIntent === "mark_task_done" ||
+      correctedIntent === "add_task_reminder" ||
       correctedIntent === "ask_today_plan" ||
       correctedIntent === "ask_tomorrow_plan" ||
       correctedIntent === "risk_scan" ||
@@ -1554,7 +1730,10 @@ async function applyOperationalSafetyResolution(args: {
   if (
     riskyIntent !== "skip_habit_for_date" &&
     riskyIntent !== "reschedule_habit_time" &&
-    riskyIntent !== "create_task"
+    riskyIntent !== "reschedule_task_time" &&
+    riskyIntent !== "create_task" &&
+    riskyIntent !== "mark_task_done" &&
+    riskyIntent !== "add_task_reminder"
   ) {
     return { extraction: args.extraction, trace: null as ModelRunTrace | null };
   }
@@ -1565,7 +1744,7 @@ async function applyOperationalSafetyResolution(args: {
       content:
         "You are a mutation safety checker for habit and planner operations. " +
         "Return valid JSON only with keys correctedIntent, continuePendingAction, supersedePendingAction, requiresClarification, clarificationQuestion. " +
-        "correctedIntent must be one of reschedule_habit_time, skip_habit_for_date, create_task, ask_today_plan, ask_tomorrow_plan, risk_scan, simple_reschedule_suggestion, or none. " +
+        "correctedIntent must be one of reschedule_habit_time, reschedule_task_time, skip_habit_for_date, create_task, mark_task_done, add_task_reminder, ask_today_plan, ask_tomorrow_plan, risk_scan, simple_reschedule_suggestion, or none. " +
         "continuePendingAction and supersedePendingAction must be booleans. " +
         "requiresClarification must be true only when the user clearly wants an operation but the target or scope is still ambiguous. " +
         "Use none when the message is only hesitation, excuse, failure report, or normal conversation rather than an operational mutation request. " +
@@ -1580,6 +1759,9 @@ async function applyOperationalSafetyResolution(args: {
         "Example: 'skip semua besok' -> skip_habit_for_date, true, ask which habit should be skipped. " +
         "Example: 'geser gym' -> reschedule_habit_time, true. " +
         "Example: 'geser gym besok jam 9 malam' -> reschedule_habit_time, false. " +
+        "Example: 'reschedule task tadi jadi jam 9 malam' -> reschedule_task_time, true when date is still missing. " +
+        "Example: 'task tadi udah beres' -> mark_task_done, false when target task is clear from context. " +
+        "Example: 'ingetin lagi task tadi 10 menit sebelumnya' -> add_task_reminder, false when target task is clear from context. " +
         "Example: 'yang paling enak digeser apa besok?' -> simple_reschedule_suggestion, false. " +
         "Example: pendingAction=create_task follow up client, user='besok jam 10 pagi' -> create_task, continuePendingAction=true, false. " +
         "Example: 'tambah task follow up client' -> create_task, true if timing is missing. " +
@@ -2023,8 +2205,11 @@ function normalizeOperationalExtraction(
   return {
     intent:
       intent === "reschedule_habit_time" ||
+      intent === "reschedule_task_time" ||
       intent === "skip_habit_for_date" ||
       intent === "create_task" ||
+      intent === "mark_task_done" ||
+      intent === "add_task_reminder" ||
       intent === "ask_today_plan" ||
       intent === "ask_tomorrow_plan" ||
       intent === "risk_scan" ||
@@ -2038,11 +2223,67 @@ function normalizeOperationalExtraction(
       coerceString(candidate.taskTitle) ||
       coerceString(candidate.title) ||
       null,
+    taskId: null,
+    reminderOffsetMinutes:
+      coerceFiniteNumber(candidate.reminderOffsetMinutes) ??
+      extractReminderOffsetMinutes(
+        coerceString(candidate.userMessage) || coerceString(candidate.content),
+      ),
     continuePendingAction: Boolean(candidate.continuePendingAction),
     supersedePendingAction: Boolean(candidate.supersedePendingAction),
     clarificationQuestion:
       coerceString(candidate.clarificationQuestion) || null,
   };
+}
+
+function includesTaskRescheduleCue(content: string) {
+  const lowered = content.toLowerCase();
+  return (
+    lowered.includes("task") ||
+    lowered.includes("tadi") ||
+    lowered.includes("yang tadi") ||
+    lowered.includes("bukan github") ||
+    lowered.includes("bukan habit")
+  );
+}
+
+function findTaskByTitle(
+  tasks: Doc<"agentTasks">[],
+  title: string | null | undefined,
+) {
+  const normalizedTitle = title?.trim().toLowerCase();
+  if (!normalizedTitle) {
+    return null;
+  }
+
+  return (
+    tasks.find((task) => task.title.trim().toLowerCase() === normalizedTitle) ??
+    null
+  );
+}
+
+function resolveRecentTaskForImplicitReschedule(args: {
+  content: string;
+  context: ChatContext;
+}) {
+  const latestTask = args.context.recentTasks[0] ?? null;
+  if (!latestTask || latestTask.status !== "pending") {
+    return null;
+  }
+
+  const recentTaskUpdate = args.context.recentMessages
+    .slice(-4)
+    .some(
+      (message) =>
+        message.role === "ai" &&
+        (message.intent === "task_update" || message.intent === "create_task"),
+    );
+  const hasTaskCue = includesTaskRescheduleCue(args.content);
+  if (!recentTaskUpdate && !hasTaskCue) {
+    return null;
+  }
+
+  return latestTask;
 }
 
 function applyDeterministicOperationalOverride(args: {
@@ -2082,6 +2323,8 @@ function applyDeterministicOperationalOverride(args: {
     targetDate,
     targetTime: null,
     taskTitle: null,
+    taskId: null,
+    reminderOffsetMinutes: null,
     continuePendingAction: false,
     supersedePendingAction: Boolean(args.pendingAction),
     clarificationQuestion:
@@ -2089,11 +2332,62 @@ function applyDeterministicOperationalOverride(args: {
   } satisfies OperationalExtractionResult;
 }
 
+function applyRecentEntityOperationalOverride(args: {
+  content: string;
+  extraction: OperationalExtractionResult | null;
+  context: ChatContext;
+}) {
+  if (!args.extraction) {
+    return null;
+  }
+
+  const taskTargetableIntent =
+    args.extraction.intent === "reschedule_habit_time" ||
+    args.extraction.intent === "reschedule_task_time" ||
+    args.extraction.intent === "mark_task_done" ||
+    args.extraction.intent === "add_task_reminder";
+  if (
+    !taskTargetableIntent ||
+    args.extraction.habitName ||
+    args.extraction.taskTitle ||
+    args.extraction.taskId
+  ) {
+    return args.extraction;
+  }
+
+  const recentTask = resolveRecentTaskForImplicitReschedule({
+    content: args.content,
+    context: args.context,
+  });
+  if (!recentTask) {
+    return args.extraction;
+  }
+
+  return {
+    ...args.extraction,
+    intent:
+      args.extraction.intent === "reschedule_habit_time"
+        ? ("reschedule_task_time" as const)
+        : args.extraction.intent,
+    taskId: recentTask._id,
+    taskTitle: args.extraction.taskTitle ?? recentTask.title,
+    clarificationQuestion: args.extraction.clarificationQuestion,
+  };
+}
+
 async function extractOperationalOutcome(input: {
   content: string;
   context: ChatContext;
   pendingAction: Doc<"agentPendingActions"> | null;
 }) {
+  const recentMessages = input.context.recentMessages
+    .slice(-6)
+    .map((message) => ({
+      role: message.role,
+      intent: normalizeIntent(message.intent),
+      content: message.content,
+      habitId: message.habitId ?? null,
+    }));
   const prompt = {
     todayDate: input.context.date,
     timezone: input.context.timezone,
@@ -2112,6 +2406,15 @@ async function extractOperationalOutcome(input: {
           clarificationQuestion: input.pendingAction.clarificationQuestion,
         }
       : null,
+    recentMessages,
+    recentTasks: input.context.recentTasks.slice(0, 6).map((task) => ({
+      id: task._id,
+      title: task.title,
+      date: task.date,
+      time: task.time ?? null,
+      status: task.status,
+      updatedAt: task.updatedAt,
+    })),
     userMessage: input.content,
   };
 
@@ -2120,18 +2423,25 @@ async function extractOperationalOutcome(input: {
       role: "system",
       content:
         "You detect operational habit and secretary commands plus clarification follow-ups. " +
-        "Return valid JSON only with keys intent, habitName, targetDate, targetTime, taskTitle, continuePendingAction, supersedePendingAction, clarificationQuestion. " +
-        "intent must be one of reschedule_habit_time, skip_habit_for_date, create_task, ask_today_plan, ask_tomorrow_plan, risk_scan, simple_reschedule_suggestion, or none. " +
+        "Return valid JSON only with keys intent, habitName, targetDate, targetTime, taskTitle, reminderOffsetMinutes, continuePendingAction, supersedePendingAction, clarificationQuestion. " +
+        "intent must be one of reschedule_habit_time, reschedule_task_time, skip_habit_for_date, create_task, mark_task_done, add_task_reminder, ask_today_plan, ask_tomorrow_plan, risk_scan, simple_reschedule_suggestion, or none. " +
         "Use currentTimeContext when the user references relative timing like sekarang, nanti, masih sempat, kelewat, hari ini, or malam ini. " +
+        "If the user asks to be reminded about a NEW activity or action, such as ingetin balik rumah, ingetin telpon mom, or remind me to X, you MUST classify this as intent create_task. The taskTitle must be the activity. Do NOT classify it as none (casual chat), and do NOT classify it as add_task_reminder unless the task already exists in the context. " +
+        "When the user specifies a relative time such as setengah jam lagi, 1 jam dari sekarang, or in 45 minutes, you MUST do the math. Add that duration to currentTimeContext to calculate the exact targetTime in HH:mm format. Do NOT output the current time as targetTime. " +
+        "If the user is creating a task purely as an immediate relative alarm, such as ingetin balik rumah setengah jam lagi, set reminderOffsetMinutes to 0 in the JSON output so the alarm rings exactly at the newly calculated targetTime instead of triggering prematurely based on a default offset. " +
         "ask_today_plan is only for requests about today's agenda, what's left today, what is not finished today, or today's remaining work. " +
         "ask_tomorrow_plan is only for requests about tomorrow's agenda or tomorrow's plan. " +
         "risk_scan is only for requests asking which item is most at risk, most likely to be missed, or most rawan kelewat. " +
         "simple_reschedule_suggestion is only for requests asking what should be shifted, what is easiest to move, or what should be rescheduled, without asking to mutate anything yet. " +
-        "create_task is only for one-off tasks like review deck, call mom, pay bills, send invoice, or follow up client. " +
+        "create_task is only for one-off tasks like review deck, call mom, pay bills, send invoice, or follow up client, and it is also the correct intent for new reminder requests about a brand-new activity. " +
+        "reschedule_task_time is for moving a one-off task's date and/or time. Use it when the target is clearly a task from recent context (for example user says task tadi), not a habit. " +
+        "mark_task_done is for explicitly marking a one-off task as finished, done, beres, kelar, selesai. " +
+        "add_task_reminder is for explicitly asking to add or set another reminder for a one-off task. " +
         "none is for general questions that are not planner commands, not task creation, and not explicit habit operations. " +
         "targetDate must be yyyy-MM-dd or null. Resolve relative dates like hari ini and besok using todayDate. " +
         "targetTime must be HH:mm 24-hour format or null. Resolve phrases like jam 7 malam into exact time. " +
         "taskTitle must be a short clean task title or null. " +
+        "reminderOffsetMinutes must be a number of minutes before the task time, or null if not provided. " +
         "skip_habit_for_date means an intentional planned skip. " +
         "Do not classify failure or missed-result reports like gagal, kelewat, ga jadi, tidak sempat, or miss hari ini as skip. Leave those as intent none so conversational logging can handle them. " +
         "Messages like skip besok or gue mau skip besok are still skip_habit_for_date even if the habit is missing and needs clarification. " +
@@ -2142,11 +2452,19 @@ async function extractOperationalOutcome(input: {
         "If the message is not an operational request, set intent to none. " +
         "Use habitName only when it matches the provided activeHabits. " +
         "If clarification is still needed, write one short clarificationQuestion. " +
+        "When examples contain [CALCULATED_DATE] or [CALCULATED_TIME...], replace them with the correct mathematical result based on currentTimeContext. " +
         "Examples: user='hari ini apa yang belum beres?' -> intent='ask_today_plan'. " +
         "Example: user='besok gue ngapain aja?' -> intent='ask_tomorrow_plan'. " +
         "Example: user='mana yang paling rawan kelewat minggu ini?' -> intent='risk_scan'. " +
         "Example: user='yang paling enak digeser apa besok?' -> intent='simple_reschedule_suggestion'. " +
         "Example: user='besok review deck jam 9 pagi' -> intent='create_task', taskTitle='review deck', targetDate='tomorrow', targetTime='09:00'. " +
+        "Example: user='ingetin balik rumah setengah jam lagi' -> intent='create_task', taskTitle='balik rumah', targetDate='[CALCULATED_DATE]', targetTime='[CALCULATED_TIME_PLUS_30_MINS]', reminderOffsetMinutes=0. " +
+        "Example: user='ingetin beli susu set jam lagi' -> intent='create_task', taskTitle='beli susu', targetDate='[CALCULATED_DATE]', targetTime='[CALCULATED_TIME_PLUS_1_HOUR]', reminderOffsetMinutes=0. " +
+        "Example: user='remind me to call mom in 15 minutes' -> intent='create_task', taskTitle='call mom', targetDate='[CALCULATED_DATE]', targetTime='[CALCULATED_TIME_PLUS_15_MINS]', reminderOffsetMinutes=0. " +
+        "Example: user='ingetin balik rumah setengah jam lagi' -> intent='create_task', taskTitle='balik rumah', targetTime computed from currentTimeContext, reminderOffsetMinutes=0. " +
+        "Example: user='reschedule task tadi ke jam 9 malam' -> intent='reschedule_task_time'. " +
+        "Example: user='task review deck udah selesai' -> intent='mark_task_done'. " +
+        "Example: user='ingetin lagi task tadi 10 menit sebelumnya' -> intent='add_task_reminder', reminderOffsetMinutes=10. " +
         "Example: user='berapa jarak bumi ke bulan?' -> intent='none'. " +
         "Do not add markdown or prose outside JSON.",
     },
@@ -2156,8 +2474,16 @@ async function extractOperationalOutcome(input: {
     },
   ]);
 
+  const extraction = normalizeOperationalExtraction(
+    parseJsonObject(result.content),
+  );
   return {
-    extraction: normalizeOperationalExtraction(parseJsonObject(result.content)),
+    extraction: {
+      ...extraction,
+      reminderOffsetMinutes:
+        extraction.reminderOffsetMinutes ??
+        extractReminderOffsetMinutes(input.content),
+    },
     trace: result.trace,
   };
 }
@@ -2168,8 +2494,31 @@ function buildOperationalRoute(input: {
   pendingAction: Doc<"agentPendingActions"> | null;
 }) {
   const pendingPayload = input.pendingAction?.payload as
-    | Record<string, string | null>
+    | Record<string, string | number | null>
     | undefined;
+  const pendingHabitName =
+    typeof pendingPayload?.habitName === "string"
+      ? pendingPayload.habitName
+      : null;
+  const pendingTargetDate =
+    typeof pendingPayload?.targetDate === "string"
+      ? pendingPayload.targetDate
+      : null;
+  const pendingTargetTime =
+    typeof pendingPayload?.targetTime === "string"
+      ? pendingPayload.targetTime
+      : null;
+  const pendingTaskTitle =
+    typeof pendingPayload?.taskTitle === "string"
+      ? pendingPayload.taskTitle
+      : null;
+  const pendingReminderOffsetMinutes =
+    typeof pendingPayload?.reminderOffsetMinutes === "number"
+      ? pendingPayload.reminderOffsetMinutes
+      : null;
+  const pendingTaskId = pendingPayload?.taskId
+    ? (pendingPayload.taskId as Id<"agentTasks">)
+    : null;
   const extractedTargetDate = isDateKey(input.extraction.targetDate)
     ? input.extraction.targetDate
     : null;
@@ -2219,6 +2568,8 @@ function buildOperationalRoute(input: {
         targetDate: null,
         targetTime: null,
         taskTitle: null,
+        taskId: null,
+        reminderOffsetMinutes: null,
         resolvedHabit: null,
         needsClarification: false,
         clarificationQuestion: null,
@@ -2240,13 +2591,23 @@ function buildOperationalRoute(input: {
   const resolvedHabit =
     findHabitByName(input.context.activeHabits, input.extraction.habitName) ??
     fallbackHabit ??
-    findHabitByName(
-      input.context.activeHabits,
-      pendingPayload?.habitName ?? null,
-    ) ??
+    findHabitByName(input.context.activeHabits, pendingHabitName) ??
     (input.context.activeHabits.length === 1
       ? input.context.activeHabits[0]
       : null);
+  const fallbackTask =
+    input.extraction.taskId != null
+      ? (input.context.recentTasks.find(
+          (task) => task._id === input.extraction.taskId,
+        ) ?? null)
+      : pendingTaskId
+        ? (input.context.recentTasks.find(
+            (task) => task._id === pendingTaskId,
+          ) ?? null)
+        : null;
+  const resolvedTask =
+    findTaskByTitle(input.context.recentTasks, input.extraction.taskTitle) ??
+    fallbackTask;
 
   const targetDate =
     extractedTargetDate ??
@@ -2258,21 +2619,26 @@ function buildOperationalRoute(input: {
           ? shiftDateKey(input.context.date, 1)
           : null) ??
     (input.extraction.continuePendingAction || inferredPendingContinuation
-      ? isDateKey(pendingPayload?.targetDate ?? null)
-        ? (pendingPayload?.targetDate ?? null)
+      ? isDateKey(pendingTargetDate)
+        ? pendingTargetDate
         : null
       : null);
   const targetTime =
     extractedTargetTime ??
     (input.extraction.continuePendingAction || inferredPendingContinuation
-      ? isTimeKey(pendingPayload?.targetTime ?? null)
-        ? (pendingPayload?.targetTime ?? null)
+      ? isTimeKey(pendingTargetTime)
+        ? pendingTargetTime
         : null
       : null);
   const taskTitle =
     input.extraction.taskTitle ??
     (input.extraction.continuePendingAction || inferredPendingContinuation
-      ? (pendingPayload?.taskTitle ?? null)
+      ? pendingTaskTitle
+      : null);
+  const reminderOffsetMinutes =
+    input.extraction.reminderOffsetMinutes ??
+    (input.extraction.continuePendingAction || inferredPendingContinuation
+      ? pendingReminderOffsetMinutes
       : null);
 
   const missingFields =
@@ -2282,11 +2648,43 @@ function buildOperationalRoute(input: {
           ...(targetDate ? [] : ["date"]),
           ...(targetTime ? [] : ["time"]),
         ]
-      : intent === "skip_habit_for_date"
-        ? [...(resolvedHabit ? [] : ["habit"]), ...(targetDate ? [] : ["date"])]
-        : intent === "create_task"
-          ? [...(taskTitle ? [] : ["title"]), ...(targetDate ? [] : ["date"])]
-          : [];
+      : intent === "reschedule_task_time"
+        ? [
+            ...(resolvedTask ? [] : ["task"]),
+            ...(targetDate ? [] : ["date"]),
+            ...(targetTime ? [] : ["time"]),
+          ]
+        : intent === "skip_habit_for_date"
+          ? [
+              ...(resolvedHabit ? [] : ["habit"]),
+              ...(targetDate ? [] : ["date"]),
+            ]
+          : intent === "create_task"
+            ? [
+                ...(taskTitle ? [] : ["title"]),
+                ...(targetDate ? [] : ["date"]),
+                ...(targetTime ? [] : ["time"]),
+              ]
+            : intent === "mark_task_done"
+              ? [...(resolvedTask ? [] : ["task"])]
+              : intent === "add_task_reminder"
+                ? resolvedTask
+                  ? []
+                  : [
+                      ...(taskTitle ? [] : ["title"]),
+                      ...(targetDate ? [] : ["date"]),
+                      ...(targetTime ? [] : ["time"]),
+                    ]
+                : [];
+
+  const clarificationQuestion =
+    input.extraction.clarificationQuestion ??
+    (intent === "reschedule_task_time" ||
+    intent === "create_task" ||
+    intent === "mark_task_done" ||
+    intent === "add_task_reminder"
+      ? null
+      : buildOperationalClarificationQuestion(intent, missingFields));
 
   return {
     route: {
@@ -2294,25 +2692,30 @@ function buildOperationalRoute(input: {
       requiredAction: intent,
       targetDate,
       targetTime,
-      taskTitle,
+      taskTitle: taskTitle ?? resolvedTask?.title ?? null,
+      taskId: resolvedTask?._id ?? null,
+      reminderOffsetMinutes,
       resolvedHabit:
         intent === "ask_today_plan" ||
         intent === "ask_tomorrow_plan" ||
         intent === "risk_scan" ||
         intent === "simple_reschedule_suggestion" ||
-        intent === "create_task"
+        intent === "create_task" ||
+        intent === "reschedule_task_time" ||
+        intent === "mark_task_done" ||
+        intent === "add_task_reminder"
           ? null
           : resolvedHabit,
       needsClarification: missingFields.length > 0,
-      clarificationQuestion:
-        input.extraction.clarificationQuestion ||
-        buildOperationalClarificationQuestion(intent, missingFields),
+      clarificationQuestion,
       missingFields,
       payload: {
         habitName: resolvedHabit?.name ?? null,
         targetDate,
         targetTime,
-        taskTitle,
+        taskTitle: taskTitle ?? resolvedTask?.title ?? null,
+        taskId: resolvedTask?._id ?? null,
+        reminderOffsetMinutes,
       },
     } satisfies OperationalRoute,
     supersededPendingAction:
@@ -2543,6 +2946,23 @@ async function generateCoachReply(input: {
   actionStatus?: "executed" | "no_op";
   workoutDetailStatus?: "accepted" | "needs_more_detail" | null;
 }) {
+  const resolvedHabitTimeContext = buildHabitTimeContext(
+    input.context,
+    input.resolvedHabit,
+  );
+  const todayHabitTimeContext = buildHabitTimeContext(
+    input.context,
+    input.context.todayHabit,
+  );
+  const scheduleFactSignal = buildScheduleFactSignal({
+    decision: input.decision,
+    context: input.context,
+    resolvedHabit: input.resolvedHabit,
+    resolvedHabitTimeContext,
+    todayHabit: input.context.todayHabit,
+    todayHabitTimeContext,
+  });
+
   const prompt = {
     userMessage: input.content,
     currentTimeContext: summarizeCurrentTimeContext(input.context),
@@ -2561,29 +2981,25 @@ async function generateCoachReply(input: {
     resolvedHabit: input.resolvedHabit
       ? summarizeHabit(input.resolvedHabit)
       : null,
-    resolvedHabitTimeContext: buildHabitTimeContext(
-      input.context,
-      input.resolvedHabit,
-    ),
+    resolvedHabitTimeContext,
     patternSummary: summarizePatternSummary(input.decision.patternSummary),
     primaryQuestionSignal: getPrimaryQuestionSignal({
       decision: input.decision,
       context: input.context,
+      scheduleFactSignal,
     }),
     supportingQuestionSignal: getSupportingQuestionSignal({
       decision: input.decision,
       context: input.context,
     }),
+    scheduleFactSignal,
     globalMemorySummary: input.context.globalMemorySummary,
     habitMemorySummary: input.context.habitMemorySummary,
     relevantEpisodes: input.context.relevantEpisodes,
     todayHabit: input.context.todayHabit
       ? summarizeHabit(input.context.todayHabit)
       : null,
-    todayHabitTimeContext: buildHabitTimeContext(
-      input.context,
-      input.context.todayHabit,
-    ),
+    todayHabitTimeContext,
     todayCheckIns: input.context.todayCheckIns.map(summarizeCheckIn),
     todayReminderStatus: input.context.todayReminderStatus,
   };
@@ -2613,6 +3029,8 @@ async function generateCoachReply(input: {
         "Use currentTimeContext, resolvedHabitTimeContext, and todayHabitTimeContext to judge urgency. If the scheduled time already passed, say it plainly. If the deadline already passed, do not talk like there is still plenty of time left. " +
         "If questionFocus is pattern, lead with primaryQuestionSignal when it exists. Prefer repeated reasons, repeated misses, recovery-after-prompt, or reminder-ignore patterns over generic weekly counts. " +
         "If questionFocus is status, use the clearest current-state signal first, then at most one supporting memory clue. " +
+        "If questionFocus is schedule, treat scheduleFactSignal and resolvedHabitTimeContext as the authoritative source for scheduledTime and checkInDeadline. " +
+        "For schedule questions, do not derive or override exact times from habitMemorySummary, globalMemorySummary, relevantEpisodes, primaryQuestionSignal, or supportingQuestionSignal. " +
         "Use supportingQuestionSignal only if it adds one useful layer, not as a second paragraph. " +
         "For clarify_workout mode, ask for the missing workout details needed for logging. " +
         "Never dump raw numbers unless one short stat is the most relevant signal. " +
@@ -2693,7 +3111,10 @@ function buildChatDecision(input: {
       input.requiredAction === "reschedule_habit_time" ||
       input.requiredAction === "skip_habit_for_date"
         ? "schedule_update"
-        : input.requiredAction === "create_task"
+        : input.requiredAction === "create_task" ||
+            input.requiredAction === "reschedule_task_time" ||
+            input.requiredAction === "mark_task_done" ||
+            input.requiredAction === "add_task_reminder"
           ? "task_update"
           : "clarify_workout";
   } else if (
@@ -2708,7 +3129,12 @@ function buildChatDecision(input: {
     input.requiredAction === "skip_habit_for_date"
   ) {
     mode = "schedule_update";
-  } else if (input.requiredAction === "create_task") {
+  } else if (
+    input.requiredAction === "create_task" ||
+    input.requiredAction === "reschedule_task_time" ||
+    input.requiredAction === "mark_task_done" ||
+    input.requiredAction === "add_task_reminder"
+  ) {
     mode = "task_update";
   } else if (input.extraction.classification === "question") {
     mode = "question";
@@ -2758,7 +3184,12 @@ async function generateOperationalReply(input: {
   decision: ChatDecision;
   habitName: string | null;
   actionResultSummary?: string | null;
-  actionNoOpReason?: "already_exists" | "not_scheduled_on_target_date" | null;
+  actionNoOpReason?:
+    | "already_exists"
+    | "not_scheduled_on_target_date"
+    | "target_date_in_past"
+    | "target_time_in_past"
+    | null;
   plan?: PlannerPlan | null;
   risk?: RiskScanResult | null;
   suggestions?: RescheduleSuggestionResult | null;
@@ -2799,12 +3230,16 @@ async function generateOperationalReply(input: {
         "For risk_scan replies, return a short ranked list with at most 3 items. " +
         "For simple_reschedule_suggestion replies, give 1 to 3 realistic suggestions without pretending anything was changed. " +
         "For reschedule confirmation, clearly confirm the habit, date, and time. " +
+        "For task reschedule confirmation, clearly confirm the task title, date, and time. " +
         "For skip confirmation, clearly confirm the skipped date without treating it like a miss. " +
         "For create_task confirmation, clearly confirm the task title, date, and time if available. " +
+        "For mark_task_done confirmation, clearly confirm the task is done and no longer pending. " +
+        "For add_task_reminder confirmation, clearly confirm the task title and the reminder offset if available. " +
         "If actionStatus is no_op, say it was already set/logged instead of pretending something changed. " +
-        "If actionNoOpReason is not_scheduled_on_target_date, this overrides generic no_op wording. Explicitly say the habit is not scheduled on that date and no mutation was applied, then roast briefly. " +
-        "For Indonesian replies in this case, include the words 'jadwal' and 'kosong', and use one direct cue like 'mau' or 'tidur sana'. " +
-        "Style example only (do not copy verbatim): 'Jadwal [habit] di [date] kosong, mau skip apa? Tidur sana.' " +
+        "If actionNoOpReason is not_scheduled_on_target_date, this overrides generic no_op wording. Explicitly say the habit is not scheduled on that date and no mutation was applied. " +
+        "If actionNoOpReason is target_date_in_past, explicitly say reschedule was blocked because the requested date is already in the past. " +
+        "If actionNoOpReason is target_time_in_past, explicitly say reschedule was blocked because the requested time has already passed. " +
+        "Never suggest skip_habit_for_date wording when requiredAction is reschedule_habit_time. " +
         "Do not invent unsupported features or extra mutations.",
     },
     {
@@ -2996,6 +3431,8 @@ export const sendMessage = action({
       targetDate: null,
       targetTime: null,
       taskTitle: null,
+      taskId: null,
+      reminderOffsetMinutes: null,
       resolvedHabit: null,
       needsClarification: false,
       clarificationQuestion: null,
@@ -3010,11 +3447,17 @@ export const sendMessage = action({
       context,
       pendingAction,
     });
-    const operationalExtraction = applyDeterministicOperationalOverride({
+    const deterministicOperationalExtraction =
+      applyDeterministicOperationalOverride({
+        content,
+        extraction: operationalSafetyResult.extraction ?? null,
+        context,
+        pendingAction,
+      });
+    const operationalExtraction = applyRecentEntityOperationalOverride({
       content,
-      extraction: operationalSafetyResult.extraction ?? null,
+      extraction: deterministicOperationalExtraction,
       context,
-      pendingAction,
     });
     const operationalRoute = operationalExtraction
       ? (buildOperationalRoute({
@@ -3259,6 +3702,8 @@ export const sendMessage = action({
       let actionNoOpReason:
         | "already_exists"
         | "not_scheduled_on_target_date"
+        | "target_date_in_past"
+        | "target_time_in_past"
         | null = null;
       let actionResultSummary = "";
       let plan: PlannerPlan | null = null;
@@ -3277,7 +3722,11 @@ export const sendMessage = action({
           },
         )) as {
           status: "executed" | "no_op";
-          reason: "not_scheduled_on_target_date" | null;
+          reason:
+            | "not_scheduled_on_target_date"
+            | "target_date_in_past"
+            | "target_time_in_past"
+            | null;
           habitName: string;
           targetDate: string;
           targetTime: string;
@@ -3289,7 +3738,11 @@ export const sendMessage = action({
           result.status === "no_op"
             ? result.reason === "not_scheduled_on_target_date"
               ? `reschedule ignored because habit is not scheduled on ${result.targetDate}`
-              : `reschedule no-op for ${result.targetDate}`
+              : result.reason === "target_date_in_past"
+                ? `reschedule blocked because ${result.targetDate} is in the past`
+                : result.reason === "target_time_in_past"
+                  ? `reschedule blocked because ${result.targetDate} ${result.targetTime} is already past`
+                  : `reschedule no-op for ${result.targetDate}`
             : `rescheduled to ${result.targetDate} ${result.targetTime}`;
       } else if (resolvedTurn.requiredAction === "skip_habit_for_date") {
         const result = (await ctx.runMutation(
@@ -3323,7 +3776,10 @@ export const sendMessage = action({
             userId: context.user._id,
             title: resolvedTurn.route.taskTitle!,
             date: resolvedTurn.route.targetDate!,
-            time: resolvedTurn.route.targetTime ?? undefined,
+            time: resolvedTurn.route.targetTime!,
+            source: "chat",
+            reminderOffsetMinutes:
+              resolvedTurn.route.reminderOffsetMinutes ?? 30,
             now,
           },
         )) as {
@@ -3339,6 +3795,120 @@ export const sendMessage = action({
           result.status === "no_op"
             ? `task already existed for ${result.date}`
             : `task created for ${result.date}${result.time ? ` ${result.time}` : ""}`;
+      } else if (resolvedTurn.requiredAction === "reschedule_task_time") {
+        const result = (await ctx.runMutation(
+          internal.agentActions.executeRescheduleTaskTime,
+          {
+            userId: context.user._id,
+            taskId: resolvedTurn.route.taskId!,
+            targetDate: resolvedTurn.route.targetDate!,
+            targetTime: resolvedTurn.route.targetTime!,
+            now,
+          },
+        )) as {
+          status: "executed" | "no_op";
+          taskId: Id<"agentTasks">;
+          title: string;
+          date: string;
+          time: string | null;
+        };
+        actionStatus = result.status;
+        taskId = result.taskId;
+        actionResultSummary =
+          result.status === "no_op"
+            ? `task schedule already set to ${result.date}${result.time ? ` ${result.time}` : ""}`
+            : `task rescheduled to ${result.date}${result.time ? ` ${result.time}` : ""}`;
+      } else if (resolvedTurn.requiredAction === "mark_task_done") {
+        const result = (await ctx.runMutation(
+          internal.agentActions.markTaskDone,
+          {
+            userId: context.user._id,
+            taskId: resolvedTurn.route.taskId!,
+            now,
+          },
+        )) as {
+          status: "executed" | "no_op";
+          taskId: Id<"agentTasks">;
+          title: string;
+          doneAt: number | null;
+        };
+        actionStatus = result.status;
+        taskId = result.taskId;
+        actionResultSummary =
+          result.status === "no_op"
+            ? `${result.title} was already done`
+            : `${result.title} marked done`;
+      } else if (resolvedTurn.requiredAction === "add_task_reminder") {
+        const reminderOffsetMinutes =
+          resolvedTurn.route.reminderOffsetMinutes ?? 30;
+
+        if (!resolvedTurn.route.taskId) {
+          const created = (await ctx.runMutation(
+            internal.agentActions.createTask,
+            {
+              userId: context.user._id,
+              title: resolvedTurn.route.taskTitle!,
+              date: resolvedTurn.route.targetDate!,
+              time: resolvedTurn.route.targetTime!,
+              source: "chat",
+              reminderOffsetMinutes,
+              now,
+            },
+          )) as {
+            status: "executed" | "no_op";
+            taskId: Id<"agentTasks">;
+            title: string;
+            date: string;
+            time: string | null;
+          };
+          taskId = created.taskId;
+
+          const reminder = (await ctx.runMutation(
+            internal.agentActions.addTaskReminder,
+            {
+              userId: context.user._id,
+              taskId: created.taskId,
+              offsetMinutes: reminderOffsetMinutes,
+              now,
+            },
+          )) as {
+            status: "executed" | "no_op";
+            taskId: Id<"agentTasks">;
+            title: string;
+            scheduledFor: number | null;
+            offsetMinutes: number;
+          };
+          actionStatus =
+            created.status === "executed" || reminder.status === "executed"
+              ? "executed"
+              : "no_op";
+          actionResultSummary =
+            created.status === "executed"
+              ? `task created and reminder added ${reminder.offsetMinutes} minutes before`
+              : `task reminder added ${reminder.offsetMinutes} minutes before`;
+        } else {
+          const result = (await ctx.runMutation(
+            internal.agentActions.addTaskReminder,
+            {
+              userId: context.user._id,
+              taskId: resolvedTurn.route.taskId,
+              offsetMinutes: reminderOffsetMinutes,
+              now,
+            },
+          )) as {
+            status: "executed" | "no_op";
+            taskId: Id<"agentTasks">;
+            title: string;
+            scheduledFor: number | null;
+            offsetMinutes: number;
+          };
+          actionStatus = result.status;
+          taskId = result.taskId;
+          actionResultSummary =
+            result.status === "no_op"
+              ? `task reminder already set ${result.offsetMinutes} minutes before`
+              : `task reminder added ${result.offsetMinutes} minutes before`;
+        }
       } else if (
         resolvedTurn.requiredAction === "ask_today_plan" ||
         resolvedTurn.requiredAction === "ask_tomorrow_plan"
@@ -3438,28 +4008,6 @@ export const sendMessage = action({
       });
 
       if (
-        resolvedTurn.requiredAction === "reschedule_habit_time" &&
-        resolvedTurn.resolvedHabit &&
-        resolvedTurn.route.targetDate &&
-        resolvedTurn.route.targetTime &&
-        actionStatus === "executed"
-      ) {
-        await ctx.runMutation(internal.agentMemory.recordEpisode, {
-          userId: context.user._id,
-          habitId: resolvedTurn.resolvedHabit._id,
-          date: context.date,
-          type: "schedule_changed",
-          summary: `${resolvedTurn.resolvedHabit.name} rescheduled to ${resolvedTurn.route.targetTime} for ${resolvedTurn.route.targetDate}.`,
-          metadata: {
-            targetDate: resolvedTurn.route.targetDate,
-            targetTime: resolvedTurn.route.targetTime,
-          },
-          sourceMessageId: userMessageId,
-          createdAt: now,
-        });
-      }
-
-      if (
         resolvedTurn.requiredAction === "skip_habit_for_date" &&
         resolvedTurn.resolvedHabit &&
         resolvedTurn.route.targetDate &&
@@ -3490,7 +4038,10 @@ export const sendMessage = action({
           resolvedTurn.requiredAction === "risk_scan" ||
           resolvedTurn.requiredAction === "simple_reschedule_suggestion"
             ? "planning"
-            : resolvedTurn.requiredAction === "create_task"
+            : resolvedTurn.requiredAction === "create_task" ||
+                resolvedTurn.requiredAction === "reschedule_task_time" ||
+                resolvedTurn.requiredAction === "mark_task_done" ||
+                resolvedTurn.requiredAction === "add_task_reminder"
               ? "task_update"
               : "schedule_update",
         timestamp: now,

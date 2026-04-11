@@ -40,6 +40,7 @@ export default defineSchema({
     bestStreak: v.number(),
     isActive: v.boolean(),
     createdAt: v.number(),
+    scheduleUpdatedAt: v.optional(v.number()),
   }).index("by_user", ["userId"]),
 
   checkIns: defineTable({
@@ -229,13 +230,33 @@ export default defineSchema({
       v.literal("done"),
       v.literal("cancelled"),
     ),
-    source: v.literal("chat"),
+    source: v.union(v.literal("chat"), v.literal("manual")),
     createdAt: v.number(),
     updatedAt: v.number(),
+    doneAt: v.optional(v.number()),
   })
     .index("by_user_date", ["userId", "date"])
     .index("by_user_status", ["userId", "status"])
     .index("by_user_date_status", ["userId", "date", "status"]),
+
+  taskReminders: defineTable({
+    taskId: v.id("agentTasks"),
+    userId: v.id("users"),
+    offsetMinutes: v.number(),
+    scheduledFor: v.number(),
+    sent: v.boolean(),
+    source: v.union(
+      v.literal("default"),
+      v.literal("chat"),
+      v.literal("manual"),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_task", ["taskId"])
+    .index("by_task_sent", ["taskId", "sent"])
+    .index("by_scheduled", ["sent", "scheduledFor"]),
 
   agentEpisodes: defineTable({
     userId: v.id("users"),

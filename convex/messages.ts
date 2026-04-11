@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
@@ -39,6 +39,16 @@ export const listByHabit = query({
     return await ctx.db
       .query("messages")
       .withIndex("by_habit", (q) => q.eq("habitId", args.habitId))
+      .collect();
+  },
+});
+
+export const listByUserForDebug = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
   },
 });
