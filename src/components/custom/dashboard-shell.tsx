@@ -2663,7 +2663,11 @@ function HomeHabitCard({
           </div>
           <div className="flex flex-wrap gap-2">
             {habit.targetDays.map((day) => (
-              <Badge key={`${habit._id}-${day}`} variant="outline">
+              <Badge
+                key={`${habit._id}-${day}`}
+                variant="outline"
+                className="border-current/45 bg-current/12 text-current"
+              >
                 {toTitleDay(day)}
               </Badge>
             ))}
@@ -2874,6 +2878,9 @@ function ChatTab({
   messages,
   primarySnapshot,
   budgetStatus,
+  notificationPermission,
+  notificationsEnabled,
+  notificationPending,
   billingPending,
   errorMessage,
   input,
@@ -2882,6 +2889,7 @@ function ChatTab({
   onSend,
   onQuickComplete,
   onQuickMiss,
+  onEnableNotifications,
   onUpgrade,
 }: {
   messages: MessageDoc[];
@@ -2893,6 +2901,9 @@ function ChatTab({
     limitReached: boolean;
     isUnlimited: boolean;
   } | null;
+  notificationPermission: NotificationPermissionState;
+  notificationsEnabled: boolean;
+  notificationPending: boolean;
   billingPending: "free" | "pro" | null;
   errorMessage: string | null;
   input: string;
@@ -2901,6 +2912,7 @@ function ChatTab({
   onSend: (content: string) => Promise<void>;
   onQuickComplete: () => Promise<void>;
   onQuickMiss: () => Promise<void>;
+  onEnableNotifications: () => Promise<void>;
   onUpgrade: () => Promise<void>;
 }) {
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<{
@@ -3141,6 +3153,31 @@ function ChatTab({
                 : `${budgetStatus?.remainingMessages ?? 20} left`}
             </span>
           </div>
+
+          {!notificationsEnabled ? (
+            <div className="flex flex-col gap-3 border-2 border-dashed border-[#C45D2A] bg-[#FCE4D6] px-4 py-3 text-sm text-[#5B2A14] shadow-[4px_4px_0px_0px_rgba(196,93,42,0.25)] sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7A3A1C]">
+                {notificationPermission === "unsupported"
+                  ? "Browser not supported for push reminders."
+                  : notificationPermission === "denied"
+                    ? "Notifications are blocked. Enable from browser settings to receive reminders."
+                    : "Enable notifications so coach reminders reach your device in real time."}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full border-[#A64A20] bg-[#F9D8C3] text-[#5B2A14] hover:bg-[#F3C4A8] sm:w-auto"
+                disabled={
+                  notificationPending ||
+                  notificationPermission === "unsupported"
+                }
+                onClick={() => void onEnableNotifications()}
+              >
+                {notificationPending ? "Enabling..." : "Enable Notifications"}
+              </Button>
+            </div>
+          ) : null}
 
           {limitReached ? (
             <div className="brutal-alert flex flex-col gap-3 p-4 text-sm leading-relaxed">
@@ -4380,7 +4417,11 @@ function HabitDetailPanel({
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {habit.targetDays.map((day) => (
-                    <Badge key={`${habit._id}-detail-${day}`} variant="outline">
+                    <Badge
+                      key={`${habit._id}-detail-${day}`}
+                      variant="outline"
+                      className="border-foreground/55 bg-foreground/12 text-foreground"
+                    >
                       {toTitleDay(day)}
                     </Badge>
                   ))}
@@ -5681,6 +5722,9 @@ export function DashboardShell() {
             messages={resolvedMessages}
             primarySnapshot={primaryHabitSnapshot}
             budgetStatus={resolvedMessageBudgetStatus}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
+            notificationPending={notificationPending}
             billingPending={billingPending}
             errorMessage={chatErrorMessage}
             input={chatInput}
@@ -5689,6 +5733,7 @@ export function DashboardShell() {
             onSend={handleSendMessage}
             onQuickComplete={handleQuickComplete}
             onQuickMiss={handleQuickMiss}
+            onEnableNotifications={handleEnableNotifications}
             onUpgrade={handleUpgrade}
           />
         ) : null}
