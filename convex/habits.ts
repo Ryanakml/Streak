@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { formatInTimeZone } from "date-fns-tz";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
@@ -19,6 +20,10 @@ async function requireOwnedUser(ctx: AuthCtx, userId: Id<"users">) {
     throw new Error("Unauthorized");
   }
   return user;
+}
+
+function getDateKey(date: Date, timezone: string) {
+  return formatInTimeZone(date, timezone, "yyyy-MM-dd");
 }
 
 export const listByUser = query({
@@ -69,12 +74,14 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwnedUser(ctx, args.userId);
+    const now = Date.now();
     const habitId = await ctx.db.insert("habits", {
       ...args,
       currentStreak: 0,
       bestStreak: 0,
       isActive: true,
-      createdAt: Date.now(),
+      createdAt: now,
+      scheduleUpdatedAt: now,
     });
 
     await ctx.scheduler.runAfter(0, internal.reminders.refreshForHabit, {
@@ -113,25 +120,52 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const habit = await ctx.db.get(args.id);
     if (!habit) throw new Error("Habit not found");
-    await requireOwnedUser(ctx, habit.userId);
+    const owner = await requireOwnedUser(ctx, habit.userId);
 
     const scheduleFieldsChanged =
       args.targetDays !== undefined ||
       args.scheduledTime !== undefined ||
       args.reminderTime !== undefined ||
       args.checkInDeadline !== undefined ||
-      args.schedules !== undefined ||
-      args.isActive !== undefined;
+      args.schedules !== undefined;
 
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(args)) {
       if (key !== "id" && value !== undefined) patch[key] = value;
+    }
+    if (scheduleFieldsChanged) {
+      patch.scheduleUpdatedAt = Date.now();
     }
 
     await ctx.db.patch(args.id, patch);
     const nextHabit = await ctx.db.get(args.id);
 
     if (scheduleFieldsChanged) {
+      const today = getDateKey(new Date(), owner.timezone ?? "UTC");
+      const relatedEpisodes = await ctx.db
+        .query("agentEpisodes")
+        .withIndex("by_user_habit_date", (q) =>
+          q.eq("userId", owner._id).eq("habitId", args.id),
+        )
+        .collect();
+
+      for (const episode of relatedEpisodes) {
+        if (episode.type !== "schedule_changed") {
+          continue;
+        }
+        const metadata =
+          episode.metadata && typeof episode.metadata === "object"
+            ? (episode.metadata as Record<string, unknown>)
+            : null;
+        const targetDate =
+          metadata && typeof metadata.targetDate === "string"
+            ? metadata.targetDate
+            : null;
+        if (targetDate && targetDate >= today) {
+          await ctx.db.delete(episode._id);
+        }
+      }
+
       await ctx.scheduler.runAfter(0, internal.reminders.refreshForHabit, {
         habitId: args.id,
       });

@@ -24,6 +24,7 @@ import type * as modelProvider from "../modelProvider.js";
 import type * as notifications from "../notifications.js";
 import type * as notificationsAction from "../notificationsAction.js";
 import type * as reminders from "../reminders.js";
+import type * as taskReminders from "../taskReminders.js";
 import type * as users from "../users.js";
 import type * as weeklyReports from "../weeklyReports.js";
 import type * as weeklyReviewAction from "../weeklyReviewAction.js";
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   notifications: typeof notifications;
   notificationsAction: typeof notificationsAction;
   reminders: typeof reminders;
+  taskReminders: typeof taskReminders;
   users: typeof users;
   weeklyReports: typeof weeklyReports;
   weeklyReviewAction: typeof weeklyReviewAction;

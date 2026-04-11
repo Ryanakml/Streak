@@ -2,17 +2,19 @@
 
 import webpush from "web-push";
 import type { Id } from "./_generated/dataModel";
-import { internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { callModelTextWithFallbackTrace } from "./modelProvider";
 
 type PushPayload = {
+  kind: "habit_reminder" | "task_reminder";
   title: string;
   body: string;
   url: string;
-  habitId: string;
-  reminderType: "pre_workout" | "check_in" | "late_follow_up";
+  habitId?: string;
+  taskId?: string;
+  reminderType?: "pre_workout" | "check_in" | "late_follow_up";
 };
 
 type ReminderCopyRewrite = {
@@ -68,6 +70,14 @@ type ReminderRewriteContext = {
   styleSeed: number;
   completionStatus: "none" | "completed" | "bonus";
   completedAtLocalTime: string | null;
+};
+
+type TaskReminderRewriteContext = {
+  taskTitle: string;
+  taskDate: string;
+  taskTime: string;
+  offsetMinutes: number;
+  languageHint: "indonesian" | "english";
 };
 
 function configureWebPush() {
@@ -163,6 +173,20 @@ function buildReminderErrorFallback(
     : {
         chatContent: "Dudeeee",
         pushBody: "Dudeeee",
+      };
+}
+
+function buildTaskReminderErrorFallback(
+  languageHint: TaskReminderRewriteContext["languageHint"],
+) {
+  return languageHint === "indonesian"
+    ? {
+        chatContent: "Bro, task lo nungguin.",
+        pushBody: "Bro, task lo nungguin.",
+      }
+    : {
+        chatContent: "Your task is sitting there waiting.",
+        pushBody: "Your task is sitting there waiting.",
       };
 }
 
@@ -299,6 +323,56 @@ async function rewriteReminderCopy(args: { context: ReminderRewriteContext }) {
   } satisfies ReminderCopyRewrite;
 }
 
+async function rewriteTaskReminderCopy(args: {
+  context: TaskReminderRewriteContext;
+}) {
+  const fallback = buildTaskReminderErrorFallback(args.context.languageHint);
+  const result = await callModelTextWithFallbackTrace(
+    [
+      {
+        role: "system",
+        content:
+          "You write one-off task reminder copy for an in-app AI buddy. " +
+          "Return valid JSON only with keys chatContent and pushBody. " +
+          "chatContent is 1 to 2 sentences. pushBody is 1 short sentence. " +
+          "The voice must feel human, specific to the task title, and slightly cynical or nagging. " +
+          "Do not sound formal, generic, motivational, or like customer support. " +
+          "Do not hardcode a template structure. Vary the opening. " +
+          "If languageHint is indonesian, use natural informal Indonesian with light slang. " +
+          "Mention the task title naturally and make the reminder feel contextual to that task. " +
+          "Do not invent extra product features or fake state changes. " +
+          "Never use maaf, silakan, tolong, mohon, or please.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify(args.context),
+      },
+    ],
+    {
+      temperature: 0.6,
+      errorLabel: "Task reminder rewrite",
+    },
+  );
+
+  try {
+    const parsed = parseJsonObject(result.content) as Record<string, unknown>;
+    const chatContent = enforceBrutalDiction(coerceString(parsed.chatContent));
+    const pushBody = enforceBrutalDiction(coerceString(parsed.pushBody));
+
+    if (!chatContent || !pushBody) {
+      return fallback;
+    }
+
+    return {
+      chatContent,
+      pushBody,
+    };
+  } catch (error) {
+    console.error("Failed to parse task reminder rewrite", error);
+    return fallback;
+  }
+}
+
 type ReminderDeliveryResult = {
   shouldSendPush: boolean;
   skipped?: boolean;
@@ -306,11 +380,14 @@ type ReminderDeliveryResult = {
   reminderType?: "pre_workout" | "check_in" | "late_follow_up";
   messageId?: Id<"messages">;
   checkInCreatedId?: Id<"checkIns">;
-  payload?: PushPayload & { rewriteContext?: ReminderRewriteContext };
+  payload?: PushPayload & {
+    rewriteContext?: ReminderRewriteContext;
+    taskRewriteContext?: TaskReminderRewriteContext;
+  };
 };
 
 async function finalizeReminderDelivery(
-  ctx: any,
+  ctx: ActionCtx,
   result: ReminderDeliveryResult,
   skipPushDelivery: boolean,
 ) {
@@ -363,6 +440,41 @@ async function finalizeReminderDelivery(
         body: fallback.pushBody,
       };
       console.error("Failed to rewrite reminder copy dynamically", error);
+    }
+  }
+
+  if (
+    result.messageId &&
+    resolvedPayload &&
+    result.payload?.taskRewriteContext &&
+    result.shouldSendPush
+  ) {
+    try {
+      const rewritten = await rewriteTaskReminderCopy({
+        context: result.payload.taskRewriteContext,
+      });
+
+      await ctx.runMutation(internal.chat.updateStoredMessage, {
+        id: result.messageId,
+        content: rewritten.chatContent,
+      });
+
+      resolvedPayload = {
+        ...resolvedPayload,
+        body: rewritten.pushBody,
+      };
+    } catch (error) {
+      const languageHint = result.payload.taskRewriteContext.languageHint;
+      const fallback = buildTaskReminderErrorFallback(languageHint);
+      await ctx.runMutation(internal.chat.updateStoredMessage, {
+        id: result.messageId,
+        content: fallback.chatContent,
+      });
+      resolvedPayload = {
+        ...resolvedPayload,
+        body: fallback.pushBody,
+      };
+      console.error("Failed to rewrite task reminder copy dynamically", error);
     }
   }
 
@@ -451,6 +563,46 @@ export const processSingleReminderDelivery = internalAction({
   },
 });
 
+export const processSingleTaskReminderDelivery = internalAction({
+  args: {
+    reminderId: v.id("taskReminders"),
+    skipPushDelivery: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    if (!args.skipPushDelivery) {
+      configureWebPush();
+    }
+
+    const result = (await ctx.runMutation(
+      internal.taskReminders.processReminder,
+      {
+        reminderId: args.reminderId,
+      },
+    )) as ReminderDeliveryResult | null;
+
+    if (!result) {
+      return { processed: 0, pushed: 0, cleanedUp: 0 };
+    }
+
+    const delivery = await finalizeReminderDelivery(
+      ctx,
+      result,
+      Boolean(args.skipPushDelivery),
+    );
+
+    return {
+      processed: 1,
+      pushed: delivery.pushed,
+      cleanedUp: delivery.cleanedUp,
+      skipped: Boolean(result.skipped),
+      shouldSendPush: Boolean(result.shouldSendPush),
+      userId: result.userId,
+      messageId: result.messageId,
+      payload: delivery.resolvedPayload,
+    };
+  },
+});
+
 export const processDueReminders = internalAction({
   args: {
     before: v.optional(v.number()),
@@ -464,6 +616,9 @@ export const processDueReminders = internalAction({
     const dueReminders = await ctx.runQuery(internal.reminders.listDue, {
       before: args.before ?? Date.now(),
     });
+    const dueTaskReminders = await ctx.runQuery(internal.taskReminders.listDue, {
+      before: args.before ?? Date.now(),
+    });
 
     let processed = 0;
     let pushed = 0;
@@ -472,6 +627,24 @@ export const processDueReminders = internalAction({
     for (const reminder of dueReminders) {
       const delivery = (await ctx.runAction(
         internal.notificationsAction.processSingleReminderDelivery,
+        {
+          reminderId: reminder._id,
+          skipPushDelivery: args.skipPushDelivery,
+        },
+      )) as {
+        processed: number;
+        pushed: number;
+        cleanedUp: number;
+      };
+
+      processed += delivery.processed;
+      pushed += delivery.pushed;
+      cleanedUp += delivery.cleanedUp;
+    }
+
+    for (const reminder of dueTaskReminders) {
+      const delivery = (await ctx.runAction(
+        internal.notificationsAction.processSingleTaskReminderDelivery,
         {
           reminderId: reminder._id,
           skipPushDelivery: args.skipPushDelivery,

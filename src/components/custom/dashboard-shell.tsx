@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -47,6 +48,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { AnimatedDock } from "@/components/ui/animated-dock";
 import { useTheme } from "@/components/custom/theme-provider";
 
@@ -138,6 +145,13 @@ type HabitFormState = {
   motivation: string;
 };
 
+type TaskFormState = {
+  title: string;
+  date: string;
+  time: string;
+  reminderOffsetMinutes: string;
+};
+
 type HabitDetailFormState = HabitFormState & {
   isActive: boolean;
   fridayOverrideEnabled: boolean;
@@ -154,6 +168,13 @@ const initialHabitForm: HabitFormState = {
   checkInDeadline: "18:30",
   rules: "Any workout 30+ mins",
   motivation: "",
+};
+
+const initialTaskForm: TaskFormState = {
+  title: "",
+  date: "",
+  time: "09:00",
+  reminderOffsetMinutes: "30",
 };
 
 function getHabitDetailInitialForm(habit: HabitDoc): HabitDetailFormState {
@@ -243,6 +264,102 @@ function getScheduledTimeForDay(habit: HabitDoc, dayKey: string) {
   return habit.scheduledTime;
 }
 
+function timeToMinutes(value: string) {
+  const [hoursRaw, minutesRaw] = value.split(":");
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    return 0;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(value: number) {
+  const normalized = ((value % 1440) + 1440) % 1440;
+  const hours = String(Math.floor(normalized / 60)).padStart(2, "0");
+  const minutes = String(normalized % 60).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function getBaseScheduleForDay(habit: HabitDoc, dayKey: string) {
+  if (dayKey === "fri" && habit.schedules?.fri) {
+    return {
+      scheduledTime: habit.schedules.fri.scheduledTime,
+      reminderTime: habit.schedules.fri.reminderTime,
+      checkInDeadline: habit.schedules.fri.checkInDeadline,
+    };
+  }
+
+  return {
+    scheduledTime: habit.scheduledTime,
+    reminderTime: habit.reminderTime,
+    checkInDeadline: habit.checkInDeadline,
+  };
+}
+
+function shiftScheduleTimes(args: {
+  scheduledTime: string;
+  reminderTime: string;
+  checkInDeadline: string;
+  nextScheduledTime: string;
+}) {
+  const scheduledMinutes = timeToMinutes(args.scheduledTime);
+  const reminderOffset = timeToMinutes(args.reminderTime) - scheduledMinutes;
+  const deadlineOffset = timeToMinutes(args.checkInDeadline) - scheduledMinutes;
+  const nextScheduledMinutes = timeToMinutes(args.nextScheduledTime);
+
+  return {
+    scheduledTime: args.nextScheduledTime,
+    reminderTime: minutesToTime(nextScheduledMinutes + reminderOffset),
+    checkInDeadline: minutesToTime(nextScheduledMinutes + deadlineOffset),
+  };
+}
+
+function getEffectiveHabitScheduleForDate(args: {
+  habit: HabitDoc;
+  dayKey: string;
+  dateKey: string;
+  reminders: ReminderDoc[];
+}) {
+  const baseSchedule = getBaseScheduleForDay(args.habit, args.dayKey);
+  const latestCheckInReminder = args.reminders
+    .filter(
+      (entry) =>
+        entry.habitId === args.habit._id &&
+        entry.date === args.dateKey &&
+        entry.type === "check_in",
+    )
+    .sort((left, right) => right.scheduledFor - left.scheduledFor)[0];
+
+  if (!latestCheckInReminder) {
+    return {
+      ...baseSchedule,
+      isRescheduled: false,
+    };
+  }
+
+  const nextScheduledTime = formatHourMinuteKey(
+    latestCheckInReminder.scheduledFor,
+  );
+  if (nextScheduledTime === baseSchedule.scheduledTime) {
+    return {
+      ...baseSchedule,
+      isRescheduled: false,
+    };
+  }
+
+  return {
+    ...shiftScheduleTimes({
+      scheduledTime: baseSchedule.scheduledTime,
+      reminderTime: baseSchedule.reminderTime,
+      checkInDeadline: baseSchedule.checkInDeadline,
+      nextScheduledTime,
+    }),
+    isRescheduled: true,
+  };
+}
+
 function formatWeekRange(weekStart: string, weekEnd: string) {
   const start = new Date(`${weekStart}T00:00:00`);
   const end = new Date(`${weekEnd}T00:00:00`);
@@ -282,8 +399,34 @@ function isReminderIntent(intent: string | undefined) {
   return (
     intent === "reminder_pre_workout" ||
     intent === "reminder_check_in" ||
-    intent === "reminder_late_follow_up"
+    intent === "reminder_late_follow_up" ||
+    intent === "task_reminder"
   );
+}
+
+function getTaskDueAt(task: AgentTaskDoc) {
+  if (!task.time) {
+    return null;
+  }
+
+  return new Date(`${task.date}T${task.time}:00`);
+}
+
+function isTaskOverdue(task: AgentTaskDoc, currentTime: Date) {
+  const dueAt = getTaskDueAt(task);
+  if (dueAt) {
+    return dueAt.getTime() <= currentTime.getTime();
+  }
+
+  return task.date < toDateKey(currentTime);
+}
+
+function shouldKeepDoneTaskVisible(task: AgentTaskDoc, currentTime: Date) {
+  if (task.status !== "done" || !task.doneAt) {
+    return false;
+  }
+
+  return currentTime.getTime() - task.doneAt < 60 * 60 * 1000;
 }
 
 function getReminderSeenKey(userId: string) {
@@ -601,13 +744,21 @@ function WeekGrid({
 function HabitComposerDialog({
   disabled,
   onCreate,
+  trigger,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
 }: {
   disabled: boolean;
   onCreate: (form: HabitFormState) => Promise<void>;
+  trigger?: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const [form, setForm] = useState<HabitFormState>(initialHabitForm);
   const [saving, setSaving] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = controlledOnOpenChange ?? setUncontrolledOpen;
 
   async function handleSubmit() {
     setSaving(true);
@@ -622,16 +773,20 @@ function HabitComposerDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button
-        type="button"
-        variant="default"
-        className="bg-black text-white"
-        onClick={() => setOpen(true)}
-        disabled={disabled}
-      >
-        <Plus />
-        New Habit
-      </Button>
+      {trigger ? (
+        <div onClick={() => !disabled && setOpen(true)}>{trigger}</div>
+      ) : (
+        <Button
+          type="button"
+          variant="default"
+          className="bg-black text-white"
+          onClick={() => setOpen(true)}
+          disabled={disabled}
+        >
+          <Plus />
+          New Habit
+        </Button>
+      )}
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="text-3xl">Create Habit</DialogTitle>
@@ -775,6 +930,183 @@ function HabitComposerDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function TaskComposerDialog({
+  disabled,
+  onCreate,
+  trigger,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+}: {
+  disabled: boolean;
+  onCreate: (form: TaskFormState) => Promise<void>;
+  trigger: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const [form, setForm] = useState<TaskFormState>(initialTaskForm);
+  const [saving, setSaving] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = controlledOnOpenChange ?? setUncontrolledOpen;
+
+  async function handleSubmit() {
+    setSaving(true);
+    try {
+      await onCreate(form);
+      setForm(initialTaskForm);
+      setOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <div onClick={() => !disabled && setOpen(true)}>{trigger}</div>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="text-3xl">Create Task</DialogTitle>
+          <DialogDescription className="text-muted-foreground">
+            Keep it simple. One task, one time, one reminder.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-5">
+          <div className="grid gap-2">
+            <Label htmlFor="task-name">Task name</Label>
+            <Input
+              id="task-name"
+              value={form.title}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  title: event.target.value,
+                }))
+              }
+              placeholder="Call mom"
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="task-date">Date</Label>
+              <Input
+                id="task-date"
+                type="date"
+                value={form.date}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    date: event.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="task-time">Time</Label>
+              <Input
+                id="task-time"
+                type="time"
+                value={form.time}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    time: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="task-reminder">Reminder (minutes before)</Label>
+            <Input
+              id="task-reminder"
+              type="number"
+              min="0"
+              value={form.reminderOffsetMinutes}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  reminderOffsetMinutes: event.target.value,
+                }))
+              }
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleSubmit()}
+            >
+              {saving ? "Saving..." : "Create Task"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateItemMenu({
+  disableHabitCreation,
+  onCreateHabit,
+  onCreateTask,
+}: {
+  disableHabitCreation: boolean;
+  onCreateHabit: (form: HabitFormState) => Promise<void>;
+  onCreateTask: (form: TaskFormState) => Promise<void>;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [habitOpen, setHabitOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
+
+  function openHabitDialog() {
+    setMenuOpen(false);
+    setTimeout(() => setHabitOpen(true), 0);
+  }
+
+  function openTaskDialog() {
+    setMenuOpen(false);
+    setTimeout(() => setTaskOpen(true), 0);
+  }
+
+  return (
+    <div className="ml-auto flex items-center">
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger className="inline-flex h-10 items-center gap-2 border-2 border-black bg-black px-5 py-2 text-sm font-medium uppercase tracking-[0.24em] text-white shadow-[4px_4px_0_0_#1a1a1a]">
+          <Plus className="size-4" />
+          New
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuItem
+            onClick={openHabitDialog}
+            disabled={disableHabitCreation}
+          >
+            New Habit
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={openTaskDialog}>New Task</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <HabitComposerDialog
+        disabled={disableHabitCreation}
+        onCreate={onCreateHabit}
+        open={habitOpen}
+        onOpenChange={setHabitOpen}
+        trigger={<span className="hidden" />}
+      />
+      <TaskComposerDialog
+        disabled={false}
+        onCreate={onCreateTask}
+        open={taskOpen}
+        onOpenChange={setTaskOpen}
+        trigger={<span className="hidden" />}
+      />
+    </div>
   );
 }
 
@@ -1072,6 +1404,12 @@ type HabitPressureSnapshot = {
   habit: HabitDoc;
   checkIn?: CheckInDoc;
   scheduledToday: boolean;
+  schedule: {
+    scheduledTime: string;
+    reminderTime: string;
+    checkInDeadline: string;
+    isRescheduled: boolean;
+  };
   state: PressureState;
   priority: number;
   nextTimeLabel: string;
@@ -1107,12 +1445,19 @@ function getHabitPressureSnapshot(
   todayKey: string,
   todayDate: string,
   todayCheckIns: CheckInDoc[],
+  todayReminders: ReminderDoc[],
   referenceDate: Date,
 ): HabitPressureSnapshot {
   const checkIn = todayCheckIns.find((entry) => entry.habitId === habit._id);
   const scheduledToday = habit.isActive && habit.targetDays.includes(todayKey);
-  const reminderDate = setTimeOnDate(referenceDate, habit.reminderTime);
-  const deadlineDate = setTimeOnDate(referenceDate, habit.checkInDeadline);
+  const schedule = getEffectiveHabitScheduleForDate({
+    habit,
+    dayKey: todayKey,
+    dateKey: todayDate,
+    reminders: todayReminders,
+  });
+  const reminderDate = setTimeOnDate(referenceDate, schedule.reminderTime);
+  const deadlineDate = setTimeOnDate(referenceDate, schedule.checkInDeadline);
   const minutesToReminder = Math.ceil(
     (reminderDate.getTime() - referenceDate.getTime()) / 60000,
   );
@@ -1168,15 +1513,15 @@ function getHabitPressureSnapshot(
 
   const base = {
     nextTimeLabel: "Schedule",
-    nextTimeValue: habit.scheduledTime,
+    nextTimeValue: schedule.scheduledTime,
     countdownLabel: "Later today",
     headline: "No pressure today.",
     support:
       "Rest day. Recover or log a bonus session if you still put work in.",
     streakLabel:
       habit.currentStreak > 0
-        ? `Current streak ${habit.currentStreak} days`
-        : "No streak running",
+        ? `| Current streak ${habit.currentStreak} days 🔥`
+        : "| No streak running",
     primaryActionLabel: "Open chat",
     chatPrompt: `How am I doing with ${habit.name}?`,
     cardClassName:
@@ -1189,6 +1534,7 @@ function getHabitPressureSnapshot(
     deadlineProgress: scheduledToday ? deadlineProgress : null,
     urgencyLabel: "No active clock",
     isPrimaryCandidate: scheduledToday || Boolean(checkIn),
+    schedule,
   };
 
   if (state === "logged") {
@@ -1248,7 +1594,7 @@ function getHabitPressureSnapshot(
       nextTimeLabel: "Miss recorded",
       nextTimeValue: checkIn
         ? formatFullTime(checkIn.timestamp)
-        : habit.checkInDeadline,
+        : schedule.checkInDeadline,
       countdownLabel: "Deadline lost",
       headline: `${habit.name} slipped today.`,
       support:
@@ -1282,7 +1628,7 @@ function getHabitPressureSnapshot(
       state,
       priority: getPressurePriority(state),
       nextTimeLabel: minutesToDeadline <= 0 ? "Past deadline" : "Deadline",
-      nextTimeValue: habit.checkInDeadline,
+      nextTimeValue: schedule.checkInDeadline,
       countdownLabel:
         minutesToDeadline <= 0
           ? "You are already late"
@@ -1329,7 +1675,9 @@ function getHabitPressureSnapshot(
       priority: getPressurePriority(state),
       nextTimeLabel: minutesToReminder <= 0 ? "Deadline" : "Reminder",
       nextTimeValue:
-        minutesToReminder <= 0 ? habit.checkInDeadline : habit.reminderTime,
+        minutesToReminder <= 0
+          ? schedule.checkInDeadline
+          : schedule.reminderTime,
       countdownLabel:
         minutesToReminder <= 0
           ? formatMinutesRemaining(minutesToDeadline)
@@ -1371,7 +1719,7 @@ function getHabitPressureSnapshot(
       state,
       priority: getPressurePriority(state),
       nextTimeLabel: "Reminder",
-      nextTimeValue: habit.reminderTime,
+      nextTimeValue: schedule.reminderTime,
       countdownLabel: formatMinutesRemaining(Math.max(minutesToReminder, 0)),
       headline: `${habit.name} is next up.`,
       support:
@@ -1569,7 +1917,11 @@ function buildHighlightAlertCards(args: {
       )
       .sort(rankHabitSnapshots)[0] ?? null;
   const pendingTasks = [...args.tasks]
-    .filter((task) => task.status === "pending")
+    .filter(
+      (task) =>
+        task.status === "pending" ||
+        shouldKeepDoneTaskVisible(task, args.currentTime),
+    )
     .sort(compareTaskScheduleAsc);
 
   const cards: HighlightAlertCard[] = [];
@@ -1641,31 +1993,48 @@ function buildHighlightAlertCards(args: {
     });
   }
 
-  pendingTasks.forEach((pendingTask) => {
-    const taskDate = new Date(`${pendingTask.date}T00:00:00`);
-    const taskTime = pendingTask.time ?? "No time set";
+  pendingTasks.forEach((task) => {
+    const taskDate = new Date(`${task.date}T00:00:00`);
+    const taskTime = task.time ?? "No time set";
+    const overdue =
+      task.status === "pending" && isTaskOverdue(task, args.currentTime);
+    const done = task.status === "done";
     cards.push({
       kind: "task",
-      id: `task-${pendingTask._id}`,
+      id: `task-${task._id}`,
       priority: 1,
-      label: "Task",
-      title: pendingTask.title,
-      support:
-        pendingTask.date === toDateKey(args.currentTime)
-          ? `Due today${pendingTask.time ? ` at ${pendingTask.time}` : ""}. Added from chat and still pending.`
-          : `Queued for ${formatWorkoutDate(taskDate.getTime())}${pendingTask.time ? ` at ${pendingTask.time}` : ""}. Added from chat and still pending.`,
-      meta: [
-        formatWorkoutDate(taskDate.getTime()),
-        taskTime,
-        pendingTask.source,
-      ],
+      label: done ? "Done" : overdue ? "Late task" : "Task",
+      title: task.title,
+      support: done
+        ? "Marked done. It stays here for a bit, then gets auto-cleared."
+        : task.date === toDateKey(args.currentTime)
+          ? `Due today${task.time ? ` at ${task.time}` : ""}. Still pending.`
+          : `Queued for ${formatWorkoutDate(taskDate.getTime())}${task.time ? ` at ${task.time}` : ""}. Still pending.`,
+      meta: [formatWorkoutDate(taskDate.getTime()), taskTime, task.source],
       actionLabel: "Open chat",
-      toneClassName: "border-black/30 bg-background text-foreground",
-      toneTextClassName: "text-foreground",
-      badgeClassName: "border-black/30 bg-background text-foreground",
-      countLabel:
-        pendingTask.date === toDateKey(args.currentTime) ? "Today" : "Queued",
-      task: pendingTask,
+      toneClassName: done
+        ? "border-black bg-black text-white"
+        : overdue
+          ? "border-[3px] border-[#DF3B23] bg-[#FBE1DC] text-[#6B1E15]"
+          : "border-black/30 bg-background text-foreground",
+      toneTextClassName: done
+        ? "text-white/85"
+        : overdue
+          ? "text-[#6B1E15]"
+          : "text-foreground",
+      badgeClassName: done
+        ? "border-white/20 bg-white text-black"
+        : overdue
+          ? "border-[#DF3B23] bg-[#DF3B23] text-white"
+          : "border-black/30 bg-background text-foreground",
+      countLabel: done
+        ? "Done"
+        : task.date === toDateKey(args.currentTime)
+          ? "Today"
+          : overdue
+            ? "Overdue"
+            : "Queued",
+      task,
     });
   });
 
@@ -1680,6 +2049,7 @@ function SummaryStatusCard({
   subscriptionTier,
   currentTime,
   onPrimaryAction,
+  onTaskMarkDone,
 }: {
   snapshots: HabitPressureSnapshot[];
   tasks: AgentTaskDoc[];
@@ -1688,6 +2058,7 @@ function SummaryStatusCard({
   subscriptionTier: "free" | "pro";
   currentTime: Date;
   onPrimaryAction: (card: HighlightAlertCard) => void;
+  onTaskMarkDone: (task: AgentTaskDoc) => Promise<void>;
 }) {
   const highlightCards = useMemo(
     () => buildHighlightAlertCards({ snapshots, tasks, currentTime }),
@@ -1748,6 +2119,19 @@ function SummaryStatusCard({
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (cardCount <= 1 || isExiting) return;
+      // Do not start drag when the pointer originates from an interactive
+      // element (button, link, input, …) so that click handlers still fire.
+      const interactiveTags = new Set([
+        "BUTTON",
+        "A",
+        "INPUT",
+        "SELECT",
+        "TEXTAREA",
+      ]);
+      const isInteractive = event.nativeEvent
+        .composedPath()
+        .some((el) => el instanceof Element && interactiveTags.has(el.tagName));
+      if (isInteractive) return;
       dragStateRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -1954,17 +2338,34 @@ function SummaryStatusCard({
                       <CountdownMeter snapshot={card.snapshot} compact />
                     ) : null}
                   </div>
-                  <Button
-                    type="button"
-                    variant={card.kind === "task" ? "outline" : "default"}
-                    disabled={index !== 0}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onPrimaryAction(card);
-                    }}
-                  >
-                    {card.actionLabel}
-                  </Button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {card.kind === "task" ? (
+                      <Button
+                        type="button"
+                        variant={
+                          card.task.status === "done" ? "secondary" : "default"
+                        }
+                        disabled={index !== 0 || card.task.status === "done"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void onTaskMarkDone(card.task);
+                        }}
+                      >
+                        Mark done
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant={card.kind === "task" ? "outline" : "default"}
+                      disabled={index !== 0}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onPrimaryAction(card);
+                      }}
+                    >
+                      {card.actionLabel}
+                    </Button>
+                  </div>
                 </div>
               </div>
             );
@@ -2183,14 +2584,16 @@ function HomeHabitCard({
               <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
                 Reminder
               </p>
-              <p className="mt-3 text-2xl font-black">{habit.reminderTime}</p>
+              <p className="mt-3 text-2xl font-black">
+                {snapshot.schedule.reminderTime}
+              </p>
             </div>
             <div className="border-b-2 border-r-0 border-current/20 p-4 sm:border-b-0 sm:border-r-2">
               <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
                 Deadline
               </p>
               <p className="mt-3 text-2xl font-black">
-                {habit.checkInDeadline}
+                {snapshot.schedule.checkInDeadline}
               </p>
             </div>
             <div className="p-4">
@@ -2349,6 +2752,7 @@ function HomeTab({
   onOpenDetail,
   canAddHabit,
   onCreateHabit,
+  onCreateTask,
 }: {
   snapshots: HabitPressureSnapshot[];
   primarySnapshot: HabitPressureSnapshot | null;
@@ -2361,6 +2765,7 @@ function HomeTab({
   onOpenDetail: (habit: HabitDoc) => void;
   canAddHabit: boolean;
   onCreateHabit: (form: HabitFormState) => Promise<void>;
+  onCreateTask: (form: TaskFormState) => Promise<void>;
 }) {
   const orderedSnapshots = [...snapshots].sort(rankHabitSnapshots);
   const primaryId = primarySnapshot?.habit._id ?? null;
@@ -2389,7 +2794,11 @@ function HomeTab({
             Home
           </h2>
         </div>
-        <HabitComposerDialog disabled={!canAddHabit} onCreate={onCreateHabit} />
+        <CreateItemMenu
+          disableHabitCreation={!canAddHabit}
+          onCreateHabit={onCreateHabit}
+          onCreateTask={onCreateTask}
+        />
       </div>
 
       {!hasExpanded ? (
@@ -2506,6 +2915,7 @@ function ChatTab({
       _id: String(message._id),
       role: message.role,
       content: message.content,
+      intent: message.intent,
       timestamp: message.timestamp,
     }));
 
@@ -2767,51 +3177,67 @@ function ChatTab({
               </div>
             ) : null}
 
-            {renderedMessages.map((message) => (
-              <div
-                key={message._id}
-                className={`border-b border-dashed border-black py-3 text-sm ${
-                  message.role === "ai" ? "pl-0 pr-0" : "pl-0 pr-0"
-                }`}
-              >
+            {renderedMessages.map((message) => {
+              const isReminderMessage =
+                message.role === "ai" && isReminderIntent(message.intent);
+
+              return (
                 <div
-                  className={`${
-                    message.role === "ai"
-                      ? "mr-0 border-2 border-black bg-secondary px-4 py-4 shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)] sm:mr-6"
-                      : "ml-0 border-2 border-black bg-background px-4 py-4 sm:ml-10"
+                  key={message._id}
+                  className={`border-b border-dashed border-black py-3 text-sm ${
+                    message.role === "ai" ? "pl-0 pr-0" : "pl-0 pr-0"
                   }`}
                 >
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                    <span
+                  <div
+                    className={`${
+                      message.role === "ai"
+                        ? isReminderMessage
+                          ? "mr-0 border-2 border-black/80 border-l-[5px] border-l-black bg-secondary/35 px-4 py-4 sm:mr-6"
+                          : "mr-0 border-2 border-black bg-secondary px-4 py-4 shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)] sm:mr-6"
+                        : "ml-0 border-2 border-black bg-background px-4 py-4 sm:ml-10"
+                    }`}
+                  >
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={
+                            message.role === "ai"
+                              ? "border border-black bg-black px-2 py-1 text-white"
+                              : "border border-black bg-white px-2 py-1 text-black"
+                          }
+                        >
+                          {message.role === "ai" ? "Coach" : "You"}
+                        </span>
+                        {isReminderMessage ? (
+                          <span className="border border-black/70 bg-background px-2 py-0.5 text-[10px] font-semibold normal-case tracking-[0.08em] text-foreground/80">
+                            reminder
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="font-bold">
+                        {formatMessageTime(message.timestamp)}
+                      </span>
+                    </div>
+                    <div
                       className={
                         message.role === "ai"
-                          ? "border border-black bg-black px-2 py-1 text-white"
-                          : "border border-black bg-white px-2 py-1 text-black"
+                          ? isReminderMessage
+                            ? "font-semibold italic text-foreground"
+                            : "font-bold text-foreground"
+                          : "text-foreground"
                       }
                     >
-                      {message.role === "ai" ? "Coach" : "You"}
-                    </span>
-                    <span className="font-bold">
-                      {formatMessageTime(message.timestamp)}
-                    </span>
-                  </div>
-                  <div
-                    className={
-                      message.role === "ai"
-                        ? "font-bold text-foreground"
-                        : "text-foreground"
-                    }
-                  >
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm, remarkBreaks]}
-                      components={markdownComponents}
-                    >
-                      {message.content}
-                    </ReactMarkdown>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm, remarkBreaks]}
+                        components={markdownComponents}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {sending ? (
               <div className="border-b border-dashed border-black py-3 text-sm">
@@ -3170,6 +3596,7 @@ function StatsTab({
       todayDayKey,
       todayStr,
       todayCheckIns,
+      weeklyReminders,
       referenceDate,
     );
     if (
@@ -3197,10 +3624,22 @@ function StatsTab({
   const boxes = weekDays.map((day) => {
     const isFuture = day.dateKey > todayStr;
     const isToday = day.dateKey === todayStr;
+    const dayTs = day.date.getTime();
 
-    const scheduled = activeHabits.filter((h) =>
-      h.targetDays.includes(day.key),
-    );
+    // Only include habits that existed on this day (guard for new users).
+    const scheduled = activeHabits.filter((h) => {
+      const startTs = habitStartById.get(h._id) ?? 0;
+      if (dayTs < startTs) return false;
+      return h.targetDays.includes(day.key);
+    });
+
+    // If no habit had started yet on this day, mark as inactive (not missed).
+    const anyHabitStartedByDay = activeHabits.some((h) => {
+      const startTs = habitStartById.get(h._id) ?? 0;
+      return dayTs >= startTs;
+    });
+    if (!anyHabitStartedByDay) return { day, status: "inactive" as const };
+
     if (scheduled.length === 0) return { day, status: "rest" as const };
 
     let hasMiss = false;
@@ -3406,7 +3845,9 @@ function StatsTab({
                       ? "bg-background text-foreground border-black border-[3px]"
                       : status === "future"
                         ? "bg-background text-transparent border-dashed border-black/30"
-                        : "bg-secondary text-muted-foreground/70 border-black/20";
+                        : status === "inactive"
+                          ? "bg-background text-transparent border-dashed border-black/15 opacity-40"
+                          : "bg-secondary text-muted-foreground/70 border-black/20";
 
               const todayMarker = isToday
                 ? "ring-[3px] ring-foreground ring-offset-2 ring-offset-background"
@@ -3430,7 +3871,7 @@ function StatsTab({
                         ? "DONE"
                         : status === "pending"
                           ? "LIVE"
-                          : status === "future"
+                          : status === "future" || status === "inactive"
                             ? "--"
                             : "REST"}
                   </div>
@@ -4443,6 +4884,8 @@ export function DashboardShell() {
   const createHabit = useMutation(api.habits.create);
   const updateHabit = useMutation(api.habits.update);
   const deleteHabit = useMutation(api.habits.remove);
+  const createAgentTask = useMutation(api.agentTasks.create);
+  const markAgentTaskDone = useMutation(api.agentTasks.markDone);
   const createCheckIn = useMutation(api.checkIns.create);
   const sendChatMessage = useAction(api.chatAction.sendMessage);
   const subscribeToNotifications = useMutation(api.notifications.subscribe);
@@ -4773,10 +5216,18 @@ export function DashboardShell() {
           todayKey,
           todayDate,
           resolvedTodayCheckIns,
+          resolvedReminders,
           now,
         ),
       ),
-    [now, resolvedHabits, resolvedTodayCheckIns, todayDate, todayKey],
+    [
+      now,
+      resolvedHabits,
+      resolvedReminders,
+      resolvedTodayCheckIns,
+      todayDate,
+      todayKey,
+    ],
   );
   const primaryHabitSnapshot =
     [...habitSnapshots]
@@ -4834,7 +5285,7 @@ export function DashboardShell() {
   async function completeOnboarding(form: HabitFormState) {
     if (!convexUser) return;
 
-    const habitId = await createHabit({
+    await createHabit({
       userId: convexUser._id,
       name: form.name.trim(),
       targetDays: form.targetDays,
@@ -4850,7 +5301,23 @@ export function DashboardShell() {
       aiPersonality: ONBOARDING_PERSONALITY,
       onboardingCompleted: true,
     });
+  }
 
+  async function createTaskFromForm(form: TaskFormState) {
+    if (!convexUser) return;
+
+    const reminderOffsetMinutes = Math.max(
+      0,
+      Number.parseInt(form.reminderOffsetMinutes, 10) || 30,
+    );
+
+    await createAgentTask({
+      userId: convexUser._id,
+      title: form.title.trim(),
+      date: form.date,
+      time: form.time,
+      reminderOffsetMinutes,
+    });
   }
 
   async function logCheckInStatus(
@@ -4924,6 +5391,10 @@ export function DashboardShell() {
     } finally {
       setPendingHabitId(null);
     }
+  }
+
+  async function handleMarkTaskDone(task: AgentTaskDoc) {
+    await markAgentTaskDone({ taskId: task._id });
   }
 
   async function handleSaveHabitDetail(
@@ -5184,6 +5655,7 @@ export function DashboardShell() {
             subscriptionTier={convexUser.subscriptionTier}
             currentTime={now}
             onPrimaryAction={handleHighlightCardAction}
+            onTaskMarkDone={handleMarkTaskDone}
           />
         </section>
 
@@ -5200,6 +5672,7 @@ export function DashboardShell() {
             onOpenDetail={(habit) => setSelectedHabitId(habit._id)}
             canAddHabit={!freeTierLimitReached}
             onCreateHabit={createHabitFromForm}
+            onCreateTask={createTaskFromForm}
           />
         ) : null}
 

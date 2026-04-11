@@ -143,15 +143,50 @@ function getDateKey(date: Date, timezone: string) {
   return formatInTimeZone(date, timezone, "yyyy-MM-dd");
 }
 
-function getDaySchedule(habit: Doc<"habits">, dayKey: string) {
-  if (dayKey === "fri" && habit.schedules?.fri) {
-    return habit.schedules.fri;
-  }
-
+function getDaySchedule(habit: Doc<"habits">) {
   return {
     scheduledTime: habit.scheduledTime,
     reminderTime: habit.reminderTime,
     checkInDeadline: habit.checkInDeadline,
+  };
+}
+
+function timeToMinutes(time: string) {
+  const [hours, minutes] = time.split(":").map((part) => Number(part));
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(totalMinutes: number) {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const hours = Math.floor(normalized / 60)
+    .toString()
+    .padStart(2, "0");
+  const minutes = (normalized % 60).toString().padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function isTimeKey(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+function shiftScheduleTimes(args: {
+  scheduledTime: string;
+  reminderTime: string;
+  checkInDeadline: string;
+  nextScheduledTime: string;
+}) {
+  const scheduledMinutes = timeToMinutes(args.scheduledTime);
+  const reminderOffset = timeToMinutes(args.reminderTime) - scheduledMinutes;
+  const deadlineOffset = timeToMinutes(args.checkInDeadline) - scheduledMinutes;
+  const nextScheduledMinutes = timeToMinutes(args.nextScheduledTime);
+
+  return {
+    scheduledTime: args.nextScheduledTime,
+    reminderTime: minutesToTime(nextScheduledMinutes + reminderOffset),
+    checkInDeadline: minutesToTime(nextScheduledMinutes + deadlineOffset),
   };
 }
 
@@ -297,15 +332,13 @@ function shiftDateKey(date: Date, timezone: string, days: number) {
   return getDateKey(next, timezone);
 }
 
-function buildReminderPayloads(
-  args: {
-    targets: ReturnType<typeof buildReminderTargets>;
-    skippedDates: Set<string>;
-    runStates: Map<string, ReminderRunState>;
-    now: number;
-    timezone: string;
-  },
-) {
+function buildReminderPayloads(args: {
+  targets: ReturnType<typeof buildReminderTargets>;
+  skippedDates: Set<string>;
+  runStates: Map<string, ReminderRunState>;
+  now: number;
+  timezone: string;
+}) {
   const reminders: Array<{
     date: string;
     scheduledFor: number;
@@ -334,13 +367,21 @@ function buildReminderPayloads(
     );
     const lateFollowUp = addMinutes(
       new Date(
-        toTimestamp(target.date, target.schedule.checkInDeadline, args.timezone),
+        toTimestamp(
+          target.date,
+          target.schedule.checkInDeadline,
+          args.timezone,
+        ),
       ),
       5,
     ).getTime();
 
     for (const entry of [
-      { date: target.date, scheduledFor: preWorkout, type: "pre_workout" as const },
+      {
+        date: target.date,
+        scheduledFor: preWorkout,
+        type: "pre_workout" as const,
+      },
       { date: target.date, scheduledFor: checkIn, type: "check_in" as const },
       {
         date: target.date,
@@ -357,11 +398,12 @@ function buildReminderPayloads(
   return reminders;
 }
 
-function buildReminderTargets(
-  habit: Doc<"habits">,
-  user: Doc<"users">,
-) {
-  const timezone = getTimezone(user);
+function buildReminderTargets(args: {
+  habit: Doc<"habits">;
+  user: Doc<"users">;
+  scheduleOverrides: Map<string, string>;
+}) {
+  const timezone = getTimezone(args.user);
   const now = Date.now();
   const targets: Array<{
     date: string;
@@ -372,13 +414,25 @@ function buildReminderTargets(
     const anchor = addDays(new Date(now), dayOffset);
     const date = getDateKey(anchor, timezone);
     const dayKey = getDayKey(anchor, timezone);
-    if (!habit.targetDays.includes(dayKey)) {
+    if (!args.habit.targetDays.includes(dayKey)) {
       continue;
     }
 
+    const baseSchedule = getDaySchedule(args.habit);
+    const overrideTime = args.scheduleOverrides.get(date);
+    const schedule =
+      overrideTime && isTimeKey(overrideTime)
+        ? shiftScheduleTimes({
+            scheduledTime: baseSchedule.scheduledTime,
+            reminderTime: baseSchedule.reminderTime,
+            checkInDeadline: baseSchedule.checkInDeadline,
+            nextScheduledTime: overrideTime,
+          })
+        : baseSchedule;
+
     targets.push({
       date,
-      schedule: getDaySchedule(habit, dayKey),
+      schedule,
     });
   }
 
@@ -456,7 +510,10 @@ async function getReminderRun(args: {
   return await args.ctx.db
     .query("reminderRuns")
     .withIndex("by_user_habit_date", (q) =>
-      q.eq("userId", args.userId).eq("habitId", args.habitId).eq("date", args.date),
+      q
+        .eq("userId", args.userId)
+        .eq("habitId", args.habitId)
+        .eq("date", args.date),
     )
     .unique();
 }
@@ -753,10 +810,11 @@ function buildReminderRewriteContext(args: {
     todayReminders: args.todayReminders,
     habitMessages: args.habitMessages,
   });
-  const lastUserResponse = stageHistory
-    .slice()
-    .reverse()
-    .find((entry) => entry.userSummary || entry.userIntent) ?? null;
+  const lastUserResponse =
+    stageHistory
+      .slice()
+      .reverse()
+      .find((entry) => entry.userSummary || entry.userIntent) ?? null;
   const completionStatus =
     args.completionCheckIn?.status === "bonus"
       ? "bonus"
@@ -845,10 +903,7 @@ function buildReminderRewriteContext(args: {
     styleSeed,
     completionStatus,
     completedAtLocalTime: args.completionCheckIn
-      ? formatReminderLocalTime(
-          args.completionCheckIn.timestamp,
-          args.timezone,
-        )
+      ? formatReminderLocalTime(args.completionCheckIn.timestamp, args.timezone)
       : null,
   } satisfies ReminderRewriteContext;
 }
@@ -973,7 +1028,49 @@ export const refreshForHabit = internalMutation({
     const runStates = new Map(
       existingRuns.map((run) => [run.date, run.state as ReminderRunState]),
     );
-    const targets = buildReminderTargets(habit, user);
+    const scheduleChangedEpisodes = await ctx.db
+      .query("agentEpisodes")
+      .withIndex("by_user_habit_date", (q) =>
+        q.eq("userId", user._id).eq("habitId", habit._id),
+      )
+      .collect();
+    const scheduleBaseline = habit.scheduleUpdatedAt ?? 0;
+
+    const scheduleOverrides = new Map<string, string>();
+    for (const episode of scheduleChangedEpisodes.sort(
+      (left, right) => right.createdAt - left.createdAt,
+    )) {
+      if (episode.type !== "schedule_changed") {
+        continue;
+      }
+      if (episode.createdAt < scheduleBaseline) {
+        continue;
+      }
+      const metadata =
+        episode.metadata && typeof episode.metadata === "object"
+          ? (episode.metadata as Record<string, unknown>)
+          : null;
+      const targetDate =
+        metadata && typeof metadata.targetDate === "string"
+          ? metadata.targetDate
+          : null;
+      const targetTime =
+        metadata && typeof metadata.targetTime === "string"
+          ? metadata.targetTime
+          : null;
+      if (!targetDate || !targetTime || !isTimeKey(targetTime)) {
+        continue;
+      }
+      if (!scheduleOverrides.has(targetDate)) {
+        scheduleOverrides.set(targetDate, targetTime);
+      }
+    }
+
+    const targets = buildReminderTargets({
+      habit,
+      user,
+      scheduleOverrides,
+    });
 
     for (const target of targets) {
       const syncedRun = await syncReminderRunForSchedule({
@@ -1128,8 +1225,7 @@ export const processReminder = internalMutation({
         .query("messages")
         .withIndex("by_habit", (q) => q.eq("habitId", habit._id))
         .collect()) as Doc<"messages">[];
-      const dayKey = getDayKey(new Date(reminder.scheduledFor), timezone);
-      const schedule = getDaySchedule(habit, dayKey);
+      const schedule = getDaySchedule(habit);
       const memorySnapshot = selectMemorySnapshot({
         memories: memoryRows,
         episodes: recentEpisodes,
@@ -1187,6 +1283,7 @@ export const processReminder = internalMutation({
         reminderType: reminder.type,
         messageId,
         payload: {
+          kind: "habit_reminder",
           title: placeholder.title,
           body: placeholder.body,
           url: "/dashboard?tab=chat",
@@ -1243,11 +1340,7 @@ export const processReminder = internalMutation({
       .query("messages")
       .withIndex("by_habit", (q) => q.eq("habitId", habit._id))
       .collect()) as Doc<"messages">[];
-    const dayKey = getDayKey(
-      new Date(reminder.scheduledFor),
-      timezone,
-    );
-    const schedule = getDaySchedule(habit, dayKey);
+    const schedule = getDaySchedule(habit);
     const memorySnapshot = selectMemorySnapshot({
       memories: memoryRows,
       episodes: recentEpisodes,
@@ -1258,7 +1351,9 @@ export const processReminder = internalMutation({
       reminder,
       reminderRunState: reminderRun?.state ?? null,
       allCheckIns,
-      todayReminders: todayReminders.filter((entry) => entry.date === reminder.date),
+      todayReminders: todayReminders.filter(
+        (entry) => entry.date === reminder.date,
+      ),
       timezone,
       memorySignal: pickMemorySignal(memorySnapshot),
     });
@@ -1279,7 +1374,7 @@ export const processReminder = internalMutation({
     });
     const placeholder = buildReminderPlaceholder();
 
-    let aiContent = placeholder.content;
+    const aiContent = placeholder.content;
     let checkInCreatedId: Id<"checkIns"> | undefined;
 
     if (reminder.type === "late_follow_up") {
@@ -1347,6 +1442,7 @@ export const processReminder = internalMutation({
       messageId,
       checkInCreatedId,
       payload: {
+        kind: "habit_reminder",
         title: placeholder.title,
         body: placeholder.body,
         url: "/dashboard?tab=chat",

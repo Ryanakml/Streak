@@ -178,17 +178,29 @@ export const getChatContext = internalQuery({
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
       .order("desc")
       .take(12);
+    const recentTasks = (
+      await ctx.db
+        .query("agentTasks")
+        .withIndex("by_user_status", (q) =>
+          q.eq("userId", user._id).eq("status", "pending"),
+        )
+        .collect()
+    )
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, 12);
 
     const allReminders = await ctx.db
       .query("reminders")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
-    const todayReminders = allReminders.filter((reminder) => reminder.date === date);
+    const todayReminders = allReminders.filter(
+      (reminder) => reminder.date === date,
+    );
     const recentEpisodes = await ctx.db
       .query("agentEpisodes")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
       .order("desc")
-      .take(12);
+      .take(120);
     const memoryRows = await ctx.db
       .query("agentMemory")
       .withIndex("by_user_scope", (q) => q.eq("userId", user._id))
@@ -220,7 +232,9 @@ export const getChatContext = internalQuery({
     const memorySnapshot = selectMemorySnapshot({
       memories: memoryRows,
       episodes: recentEpisodes,
-      habitId: todayHabit?._id ?? (activeHabits.length === 1 ? activeHabits[0]?._id : null),
+      habitId:
+        todayHabit?._id ??
+        (activeHabits.length === 1 ? activeHabits[0]?._id : null),
     });
 
     return {
@@ -243,6 +257,7 @@ export const getChatContext = internalQuery({
       todayCheckIns,
       recentMessages: [...recentMessagesDesc].reverse(),
       recentCheckIns,
+      recentTasks,
       recentAgentEpisodes: recentEpisodes,
       agentMemories: memoryRows,
       relevantEpisodes: memorySnapshot.relevantEpisodes,
@@ -330,11 +345,7 @@ export const persistChatResult = internalMutation({
     aiContent: v.string(),
     aiIntent: v.string(),
     checkInStatus: v.optional(
-      v.union(
-        v.literal("completed"),
-        v.literal("missed"),
-        v.literal("bonus"),
-      ),
+      v.union(v.literal("completed"), v.literal("missed"), v.literal("bonus")),
     ),
     reason: v.optional(v.string()),
     conversationSummary: v.optional(v.string()),

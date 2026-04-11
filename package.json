@@ -12,11 +12,14 @@
     "seed:phase3": "node scripts/seed-phase3-verification.mjs",
     "seed:phase4": "node scripts/seed-phase4-verification.mjs",
     "seed:phase5": "node scripts/seed-phase5-verification.mjs",
+    "seed:task-smoke": "node scripts/seed-task-reminder-smoke.mjs",
+    "seed:wipe-user": "node scripts/wipe-user-workspace.mjs",
     "seed:ui": "node scripts/seed-ui-demo.mjs",
     "phase3:process-reminders": "node scripts/process-phase3-reminders.mjs",
     "phase3:refresh-memory": "node scripts/refresh-phase3-memory.mjs",
     "phase4:process-reminders": "node scripts/process-phase4-reminders.mjs",
     "phase5:process-reminders": "node scripts/process-phase5-reminders.mjs",
+    "task:process-reminders": "node scripts/process-task-reminders.mjs",
     "eval:agent": "node scripts/run-agent-eval.mjs"
   },
   "dependencies": {
