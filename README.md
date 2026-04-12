@@ -1,10 +1,12 @@
 # Streak
 
+![Streak Mockup](public/mockup.png)
+
 Streak is an AI accountability habit tracker. It combines a normal habit dashboard with an AI coach, reminders, push notifications, streak tracking, and weekly readouts so a user can define a habit, get pushed at the right time, log the result, and review the pattern later.
 
 This README is written for two audiences:
 
-- Users and product testers who want to understand what the app does. More detail, checkout app  [tutorial](tutorials.md)
+- Users and product testers who want to understand what the app does. More detail, checkout app [tutorial](tutorials.md)
 - Developers who need to run, maintain, or extend the codebase.
 
 ## Product Guide
