@@ -4558,6 +4558,7 @@ function HabitDetailPanel({
   allReminders,
   allWorkoutLogs,
   referenceDate,
+  saving,
   onClose,
   onSave,
 }: {
@@ -4578,6 +4579,7 @@ function HabitDetailPanel({
 
   useEffect(() => {
     if (open && habit) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm(getHabitDetailInitialForm(habit));
     } else if (!open) {
       // Don't clear immediately to avoid flash during close animation
@@ -4591,12 +4593,8 @@ function HabitDetailPanel({
 
   const isMobile = useIsMobile();
 
-  const currentHabit = habit;
-  const currentForm = form;
-
   const {
     weekDays,
-    habitCheckIns,
     weeklyCheckIns,
     weeklySkips,
     weeklyReminderRuns,
@@ -4607,7 +4605,6 @@ function HabitDetailPanel({
     if (!habit) {
       return {
         weekDays: [],
-        habitCheckIns: [],
         weeklyCheckIns: [],
         weeklySkips: [],
         weeklyReminderRuns: [],
@@ -4661,7 +4658,6 @@ function HabitDetailPanel({
 
     return {
       weekDays: days,
-      habitCheckIns: hCheckIns,
       weeklyCheckIns: wCheckIns,
       weeklySkips: wSkips,
       weeklyReminderRuns: wReminderRuns,
@@ -4684,7 +4680,8 @@ function HabitDetailPanel({
   }
 
   async function handleSave() {
-    await onSave(currentHabit, currentForm);
+    if (!habit || !form) return;
+    await onSave(habit, form);
     setIsEditing(false);
   }
 
@@ -4960,7 +4957,7 @@ function HabitDetailPanel({
           </CardHeader>
           <CardContent>
             <WeekGrid
-              habit={currentHabit}
+              habit={habit}
               weekDays={weekDays}
               weeklyCheckIns={weeklyCheckIns}
               weeklySkips={weeklySkips}
@@ -5446,6 +5443,10 @@ export function DashboardShell() {
   const [aiTogglePending, setAiTogglePending] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
+  const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
+  const [detailSaving, setDetailSaving] = useState(false);
+  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [chatErrorMessage, setChatErrorMessage] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermissionState>(
       typeof window === "undefined"
@@ -5456,11 +5457,6 @@ export function DashboardShell() {
     );
   const [notificationPending, setNotificationPending] = useState(false);
   const [lastSeenReminderTimestamp, setLastSeenReminderTimestamp] = useState(0);
-  const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
-  const [detailSaving, setDetailSaving] = useState(false);
-  const [isHabitDetailOpen, setIsHabitDetailOpen] = useState(false);
-  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
-  const [chatErrorMessage, setChatErrorMessage] = useState<string | null>(null);
   const [upgradePending, setUpgradePending] = useState(false);
 
   const syncUser = useMutation(api.users.syncUser);
