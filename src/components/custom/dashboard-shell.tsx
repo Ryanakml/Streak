@@ -12,7 +12,7 @@ import {
 } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -2885,11 +2885,13 @@ function ChatTab({
   input,
   setInput,
   sending,
+  upgradePending,
   onSend,
   onQuickComplete,
   onQuickMiss,
   onEnableNotifications,
   onUpgrade,
+  canUpgrade,
 }: {
   messages: MessageDoc[];
   primarySnapshot: HabitPressureSnapshot | null;
@@ -2907,11 +2909,13 @@ function ChatTab({
   input: string;
   setInput: (value: string) => void;
   sending: boolean;
+  upgradePending: boolean;
   onSend: (content: string) => Promise<void>;
   onQuickComplete: () => Promise<void>;
   onQuickMiss: () => Promise<void>;
   onEnableNotifications: () => Promise<void>;
   onUpgrade: () => Promise<void>;
+  canUpgrade: boolean;
 }) {
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<{
     _id: string;
@@ -3177,15 +3181,19 @@ function ChatTab({
             </div>
           ) : null}
 
-          {limitReached ? (
+          {limitReached && canUpgrade ? (
             <div className="brutal-alert flex flex-col gap-3 p-4 text-sm leading-relaxed">
               <p className="text-white">
                 You burned through today&apos;s free chat budget. Read-only
                 still works. Upgrade if you want more messages right now.
               </p>
               <div className="pt-1">
-                <Button type="button" onClick={() => void onUpgrade()}>
-                  Upgrade to Pro
+                <Button
+                  type="button"
+                  disabled={upgradePending}
+                  onClick={() => void onUpgrade()}
+                >
+                  {upgradePending ? "Redirecting..." : "Upgrade to Pro"}
                 </Button>
               </div>
             </div>
@@ -4576,11 +4584,13 @@ function ProfileTab({
   notificationPermission,
   notificationsEnabled,
   notificationPending,
+  upgradePending,
   onEnableNotifications,
   onUpgrade,
   onToggleAiDisabled,
   theme,
   onToggleTheme,
+  canUpgrade,
 }: {
   email: string;
   tier: "free" | "pro";
@@ -4599,11 +4609,13 @@ function ProfileTab({
   notificationPermission: NotificationPermissionState;
   notificationsEnabled: boolean;
   notificationPending: boolean;
+  upgradePending: boolean;
   onEnableNotifications: () => Promise<void>;
   onUpgrade: () => Promise<void>;
   onToggleAiDisabled: () => Promise<void>;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  canUpgrade: boolean;
 }) {
   const activeHabits = habits.filter((habit) => habit.isActive);
   const bestStreak = Math.max(
@@ -4673,11 +4685,17 @@ function ProfileTab({
                   </p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => void onUpgrade()}>
-                  Upgrade to Pro
-                </Button>
-              </div>
+              {canUpgrade ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={upgradePending}
+                    onClick={() => void onUpgrade()}
+                  >
+                    {upgradePending ? "Redirecting..." : "Upgrade to Pro"}
+                  </Button>
+                </div>
+              ) : null}
             </section>
 
             <section className="space-y-3 border-t-2 border-black pt-4">
@@ -4865,7 +4883,6 @@ function ProfileTab({
 
 export function DashboardShell() {
   const { user, isLoaded } = useUser();
-  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const searchParams = useSearchParams();
   const syncAttempted = useRef(false);
@@ -4889,6 +4906,7 @@ export function DashboardShell() {
   const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
   const [detailSaving, setDetailSaving] = useState(false);
   const [chatErrorMessage, setChatErrorMessage] = useState<string | null>(null);
+  const [upgradePending, setUpgradePending] = useState(false);
 
   const syncUser = useMutation(api.users.syncUser);
   const updateProfile = useMutation(api.users.updateProfile);
@@ -5561,7 +5579,31 @@ export function DashboardShell() {
   }
 
   async function handleUpgrade() {
-    router.push("/plans");
+    setUpgradePending(true);
+
+    try {
+      const response = await fetch("/api/billing/upgrade", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: "{}",
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; reason?: string; url?: string }
+        | null;
+
+      if (!response.ok || !payload?.url) {
+        window.location.href = "/plans";
+        return;
+      }
+
+      window.location.href = payload.url;
+    } finally {
+      setUpgradePending(false);
+    }
   }
 
   async function handleToggleAiDisabled() {
@@ -5675,11 +5717,13 @@ export function DashboardShell() {
             input={chatInput}
             setInput={setChatInput}
             sending={chatSending}
+            upgradePending={upgradePending}
             onSend={handleSendMessage}
             onQuickComplete={handleQuickComplete}
             onQuickMiss={handleQuickMiss}
             onEnableNotifications={handleEnableNotifications}
             onUpgrade={handleUpgrade}
+            canUpgrade={convexUser.subscriptionTier !== "pro"}
           />
         ) : null}
 
@@ -5710,11 +5754,13 @@ export function DashboardShell() {
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationPending={notificationPending}
+            upgradePending={upgradePending}
             onEnableNotifications={handleEnableNotifications}
             onUpgrade={handleUpgrade}
             onToggleAiDisabled={handleToggleAiDisabled}
             theme={theme}
             onToggleTheme={toggleTheme}
+            canUpgrade={convexUser.subscriptionTier !== "pro"}
           />
         ) : null}
       </div>
