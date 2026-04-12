@@ -22,6 +22,7 @@ import {
   CalendarDays,
   ChartNoAxesColumn,
   Check,
+  Ellipsis,
   MessageSquare,
   MoonStar,
   MonitorCog,
@@ -45,6 +46,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -254,6 +262,19 @@ function formatHourMinuteKey(timestamp: number) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const update = () => setIsMobile(window.innerWidth < breakpoint);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [breakpoint]);
+
+  return isMobile;
 }
 
 function getScheduledTimeForDay(habit: HabitDoc, dayKey: string) {
@@ -2234,9 +2255,9 @@ function SummaryStatusCard({
     <div
       className={`grid gap-4 ${highlightCards.length > 0 ? "md:grid-cols-[0.88fr_1.12fr]" : "md:grid-cols-1"}`}
     >
-      <div className="space-y-2 border-2 border-black bg-secondary p-5 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)]">
+      <div className="space-y-2 border-2 border-black bg-secondary p-4 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)] sm:p-5">
         <p className="brutal-meta">Streak</p>
-        <h1 className="text-4xl font-black uppercase tracking-[-0.08em] sm:text-6xl">
+        <h1 className="text-[clamp(2rem,8vw,3.75rem)] font-black uppercase tracking-[-0.08em]">
           {formatToday(currentTime)}
         </h1>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-black pt-3">
@@ -2251,7 +2272,7 @@ function SummaryStatusCard({
 
       {highlightCards.length > 0 ? (
         <div
-          className={`relative min-h-[300px] touch-pan-y select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+          className={`relative min-h-[240px] touch-pan-y select-none sm:min-h-[280px] md:min-h-[300px] ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -2263,9 +2284,9 @@ function SummaryStatusCard({
             const translateX =
               index === 0
                 ? isExiting
-                  ? exitDirection * 420
+                  ? exitDirection * 320
                   : dragOffset
-                : index * 36;
+                : index * 24;
             const scale = index === 0 ? 1 : 0.985 - Math.min(index, 2) * 0.02;
             const opacity =
               index > 2 ? 0 : index === 0 ? 1 : 0.88 - index * 0.1;
@@ -2287,14 +2308,14 @@ function SummaryStatusCard({
                     setFrontCardIndex((current) => current + index);
                   }
                 }}
-                className={`absolute left-0 top-0 w-[calc(100%-3.25rem)] border-2 p-5 text-left shadow-[8px_8px_0px_0px_rgba(26,24,20,0.28)] transition-[transform,opacity] ${transitionClass} ${index > 0 ? "cursor-pointer" : ""} ${card.toneClassName}`}
+                className={`absolute left-0 top-0 w-[calc(100%-2rem)] border-2 p-4 text-left shadow-[6px_6px_0px_0px_rgba(26,24,20,0.22)] transition-[transform,opacity] sm:w-[calc(100%-2.5rem)] sm:p-5 sm:shadow-[8px_8px_0px_0px_rgba(26,24,20,0.28)] ${transitionClass} ${index > 0 ? "cursor-pointer" : ""} ${card.toneClassName}`}
                 style={{
                   transform: `translate3d(${translateX}px, 0, 0) scale(${scale})`,
                   zIndex,
                   opacity,
                 }}
               >
-                <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-current/15 pb-4">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-current/15 pb-3 sm:gap-4 sm:pb-4">
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
@@ -2303,15 +2324,20 @@ function SummaryStatusCard({
                         {card.label}
                       </span>
                     </div>
-                    <p className="text-2xl font-black uppercase tracking-[-0.05em] sm:text-3xl">
+                    <p className="text-[clamp(1.15rem,5.2vw,1.875rem)] font-black uppercase tracking-[-0.05em] sm:text-[clamp(1.35rem,6vw,1.875rem)]">
                       {card.title}
                     </p>
+                    <p
+                      className={`text-[10px] font-bold uppercase tracking-[0.18em] opacity-75 sm:hidden ${card.toneTextClassName}`}
+                    >
+                      {card.meta[0] ?? card.countLabel}
+                    </p>
                   </div>
-                  <div className="min-w-[112px] border-2 border-current/20 bg-background/35 p-3 text-right">
+                  <div className="hidden w-full border-2 border-current/20 bg-background/35 p-3 text-left sm:block sm:min-w-[112px] sm:w-auto sm:text-right">
                     <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80">
                       Today
                     </p>
-                    <p className="mt-2 text-3xl font-black">
+                    <p className="mt-2 text-2xl font-black sm:text-3xl">
                       {scheduledToday > 0
                         ? `${completedToday}/${scheduledToday}`
                         : "0/0"}
@@ -2322,30 +2348,54 @@ function SummaryStatusCard({
                   </div>
                 </div>
 
-                <div className="grid gap-4 pt-4 lg:grid-cols-[1fr_auto] lg:items-end">
+                <div className="grid gap-3 pt-3 sm:gap-4 sm:pt-4 lg:grid-cols-[1fr_auto] lg:items-end">
                   <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2 border-2 border-current/20 bg-background/35 p-2.5 sm:hidden">
+                      <div>
+                        <p className="text-[9px] font-bold uppercase tracking-[0.18em] opacity-70">
+                          Today
+                        </p>
+                        <p className="mt-1 text-xl font-black">
+                          {scheduledToday > 0
+                            ? `${completedToday}/${scheduledToday}`
+                            : "0/0"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-bold uppercase tracking-[0.18em] opacity-70">
+                          Status
+                        </p>
+                        <p className="mt-1 text-sm font-black uppercase tracking-[0.14em]">
+                          {card.countLabel}
+                        </p>
+                      </div>
+                    </div>
                     <p
-                      className={`text-[11px] font-bold uppercase tracking-[0.18em] opacity-80 ${card.toneTextClassName}`}
+                      className={`hidden text-[11px] font-bold uppercase tracking-[0.18em] opacity-80 sm:block ${card.toneTextClassName}`}
                     >
                       {card.meta.join(" · ")}
                     </p>
                     <p
-                      className={`max-w-2xl text-sm leading-6 opacity-90 ${card.toneTextClassName}`}
+                      className={`hidden max-w-2xl text-sm leading-5 opacity-90 sm:block sm:leading-6 ${card.toneTextClassName}`}
                     >
                       {card.support}
                     </p>
                     {card.kind === "habit" ? (
-                      <CountdownMeter snapshot={card.snapshot} compact />
+                      <div className="hidden sm:block">
+                        <CountdownMeter snapshot={card.snapshot} compact />
+                      </div>
                     ) : null}
                   </div>
-                  <div className="flex flex-wrap justify-end gap-2">
+                  <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
                     {card.kind === "task" ? (
                       <Button
                         type="button"
+                        size="lg"
                         variant={
                           card.task.status === "done" ? "secondary" : "default"
                         }
                         disabled={index !== 0 || card.task.status === "done"}
+                        className="w-full sm:w-auto"
                         onClick={(event) => {
                           event.stopPropagation();
                           void onTaskMarkDone(card.task);
@@ -2356,8 +2406,10 @@ function SummaryStatusCard({
                     ) : null}
                     <Button
                       type="button"
+                      size="lg"
                       variant={card.kind === "task" ? "outline" : "default"}
                       disabled={index !== 0}
+                      className="w-full sm:w-auto"
                       onClick={(event) => {
                         event.stopPropagation();
                         onPrimaryAction(card);
@@ -2455,16 +2507,22 @@ function HomeHabitCard({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 md:justify-end">
+          <div className="grid gap-2 sm:flex sm:flex-wrap md:justify-end">
             <Button
               type="button"
               variant="outline"
               onClick={() => onOpenDetail(habit)}
+              className="min-h-11 w-full sm:w-auto"
             >
               <PencilLine />
               Details
             </Button>
-            <Button type="button" variant="outline" onClick={onOpenChat}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onOpenChat}
+              className="min-h-11 w-full sm:w-auto"
+            >
               <MessageSquare />
               Chat
             </Button>
@@ -2473,6 +2531,7 @@ function HomeHabitCard({
               variant="outline"
               onClick={() => onToggleActive(habit)}
               disabled={pendingHabitId === habit._id}
+              className="min-h-11 w-full sm:w-auto"
             >
               {habit.isActive ? "Pause" : "Resume"}
             </Button>
@@ -2506,7 +2565,11 @@ function HomeHabitCard({
             </Badge>
           </div>
           <div className="space-y-2">
-            <CardTitle className={`${isPrimary ? "text-4xl" : "text-3xl"}`}>
+            <CardTitle
+              className={
+                isPrimary ? "text-3xl sm:text-4xl" : "text-2xl sm:text-3xl"
+              }
+            >
               {habit.name}
             </CardTitle>
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] opacity-80">
@@ -2515,32 +2578,60 @@ function HomeHabitCard({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:w-auto sm:flex-wrap sm:items-center">
           <Button
             type="button"
             variant="outline"
             onClick={() => onOpenDetail(habit)}
+            className="min-h-11 flex-1 sm:flex-none"
           >
             <PencilLine />
             Details
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onToggleActive(habit)}
-            disabled={pendingHabitId === habit._id}
-          >
-            {habit.isActive ? "Pause" : "Resume"}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => onDeleteHabit(habit)}
-            disabled={pendingHabitId === habit._id}
-          >
-            <Trash2 />
-          </Button>
+          <div className="sm:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex">
+                <Button type="button" variant="outline" size="icon-lg">
+                  <Ellipsis />
+                  <span className="sr-only">More actions</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem
+                  onClick={() => void onToggleActive(habit)}
+                  disabled={pendingHabitId === habit._id}
+                >
+                  {habit.isActive ? "Pause" : "Resume"}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => void onDeleteHabit(habit)}
+                  disabled={pendingHabitId === habit._id}
+                >
+                  Delete habit
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="hidden sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onToggleActive(habit)}
+              disabled={pendingHabitId === habit._id}
+              className="min-h-11"
+            >
+              {habit.isActive ? "Pause" : "Resume"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-lg"
+              onClick={() => onDeleteHabit(habit)}
+              disabled={pendingHabitId === habit._id}
+            >
+              <Trash2 />
+            </Button>
+          </div>
         </div>
       </CardHeader>
 
@@ -2550,7 +2641,7 @@ function HomeHabitCard({
             <p className="text-[10px] font-black uppercase tracking-[0.24em] opacity-70">
               Today status
             </p>
-            <p className="mt-3 text-3xl font-black uppercase tracking-[-0.05em]">
+            <p className="mt-3 text-2xl font-black uppercase tracking-[-0.05em] sm:text-3xl">
               {state === "logged"
                 ? checkIn?.status === "bonus"
                   ? "Bonus banked"
@@ -2579,7 +2670,39 @@ function HomeHabitCard({
             </div>
           </div>
 
-          <div className="grid border-2 border-current/20 sm:grid-cols-3">
+          <details className="border-2 border-current/20 bg-background/35 p-4 sm:hidden">
+            <summary className="cursor-pointer text-[11px] font-black uppercase tracking-[0.18em]">
+              Schedule details
+            </summary>
+            <div className="mt-4 grid gap-3 text-sm">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-70">
+                  Reminder
+                </p>
+                <p className="mt-1 text-xl font-black">
+                  {snapshot.schedule.reminderTime}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-70">
+                  Deadline
+                </p>
+                <p className="mt-1 text-xl font-black">
+                  {snapshot.schedule.checkInDeadline}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-70">
+                  Streak
+                </p>
+                <p className="mt-1 text-xl font-black">
+                  {habit.currentStreak} days
+                </p>
+              </div>
+            </div>
+          </details>
+
+          <div className="hidden border-2 border-current/20 sm:grid sm:grid-cols-3">
             <div className="border-b-2 border-r-0 border-current/20 p-4 sm:border-b-0 sm:border-r-2">
               <p className="text-xs font-bold text-muted-foreground uppercase opacity-80">
                 Reminder
@@ -2607,12 +2730,14 @@ function HomeHabitCard({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-start gap-4">
+        <div className="grid gap-3 sm:flex sm:flex-wrap sm:items-start">
           <div className="flex flex-col gap-1.5">
             <Button
               type="button"
+              size="lg"
               variant={state === "logged" ? "outline" : "default"}
               disabled={!canMarkComplete}
+              className="w-full sm:w-auto"
               onClick={() => {
                 if (
                   state === "deadline-risk" &&
@@ -2638,13 +2763,52 @@ function HomeHabitCard({
                 </span>
               )}
           </div>
-          <Button type="button" variant="outline" onClick={onOpenChat}>
+          <Button
+            type="button"
+            size="lg"
+            variant="outline"
+            onClick={onOpenChat}
+            className="w-full sm:w-auto"
+          >
             <MessageSquare />
             {state === "missed" ? "Reset in chat" : "Chat with coach"}
           </Button>
         </div>
 
-        <div className="space-y-3 border-t-2 border-current/15 pt-5">
+        <details className="border-t-2 border-current/15 pt-5 sm:hidden">
+          <summary className="cursor-pointer text-[11px] font-black uppercase tracking-[0.18em]">
+            More context
+          </summary>
+          <div className="mt-4 space-y-3">
+            <div className={`border-2 p-4 ${detailSurfaceClassName}`}>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-75">
+                Rules
+              </p>
+              <p className="mt-2 text-sm leading-6 opacity-90">{habit.rules}</p>
+            </div>
+            <div className={`border-2 p-4 ${detailSurfaceClassName}`}>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-75">
+                Motivation
+              </p>
+              <p className="mt-2 text-sm leading-6 opacity-90">
+                {habit.motivation}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {habit.targetDays.map((day) => (
+                <Badge
+                  key={`${habit._id}-${day}`}
+                  variant="outline"
+                  className="border-current/45 bg-current/12 text-current"
+                >
+                  {toTitleDay(day)}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        </details>
+
+        <div className="hidden space-y-3 border-t-2 border-current/15 pt-5 sm:block">
           <div className="grid gap-3 lg:grid-cols-2">
             <div className={`border-2 p-4 ${detailSurfaceClassName}`}>
               <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-75">
@@ -2794,7 +2958,7 @@ function HomeTab({
       <div className="flex flex-col gap-4 border-b-2 border-black pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="brutal-meta">Dashboard</p>
-          <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
+          <h2 className="text-3xl font-black uppercase tracking-[-0.08em] sm:text-4xl">
             Home
           </h2>
         </div>
@@ -4154,6 +4318,7 @@ function HabitDetailPanel({
   const [form, setForm] = useState<HabitDetailFormState | null>(() =>
     habit ? getHabitDetailInitialForm(habit) : null,
   );
+  const isMobile = useIsMobile();
 
   if (!open || !habit || !form) {
     return null;
@@ -4209,6 +4374,392 @@ function HabitDetailPanel({
     setForm((current) => (current ? { ...current, [key]: value } : current));
   }
 
+  const detailHeader = (
+    <div className="flex items-start justify-between gap-4">
+      <div className="space-y-3">
+        <p className="brutal-meta">Habit Detail</p>
+        <h2 className="text-3xl font-black uppercase tracking-[-0.08em] sm:text-4xl">
+          {habit.name}
+        </h2>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">
+            {habit.isActive ? "Active" : "Paused"}
+          </Badge>
+          <Badge variant="outline">Streak {habit.currentStreak}</Badge>
+          <Badge variant="outline">Best {habit.bestStreak}</Badge>
+        </div>
+      </div>
+      <div className="hidden items-center gap-2 sm:flex">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setIsEditing((current) => !current)}
+        >
+          <PencilLine />
+          {isEditing ? "Cancel edit" : "Edit"}
+        </Button>
+        <Button type="button" variant="outline" size="icon" onClick={onClose}>
+          <X />
+        </Button>
+      </div>
+    </div>
+  );
+
+  const detailBody = (
+    <div className="mt-4 grid gap-4 sm:mt-6 sm:gap-6">
+      <div className="flex gap-2 sm:hidden">
+        <Button
+          type="button"
+          variant="outline"
+          className="flex-1"
+          onClick={() => setIsEditing((current) => !current)}
+        >
+          <PencilLine />
+          {isEditing ? "Cancel" : "Edit"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-lg"
+          onClick={onClose}
+        >
+          <X />
+        </Button>
+      </div>
+
+      <div className="grid gap-4 sm:gap-6">
+        {isEditing ? (
+          <Card className="bg-background">
+            <CardHeader>
+              <CardTitle className="text-2xl">Edit Habit</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-5">
+              <div className="grid gap-2">
+                <Label htmlFor="detail-name">Habit name</Label>
+                <Input
+                  id="detail-name"
+                  value={form.name}
+                  onChange={(event) => updateForm("name", event.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-3">
+                <Label>Target days</Label>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {DAYS.map((day) => {
+                    const checked = form.targetDays.includes(day.key);
+                    return (
+                      <label
+                        key={day.key}
+                        className="flex items-center gap-3 border-2 border-black bg-card px-3 py-3 text-sm uppercase"
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) =>
+                            updateForm(
+                              "targetDays",
+                              value
+                                ? [...form.targetDays, day.key]
+                                : form.targetDays.filter(
+                                    (entry) => entry !== day.key,
+                                  ),
+                            )
+                          }
+                        />
+                        <span>{day.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-scheduled-time">Scheduled</Label>
+                  <Input
+                    id="detail-scheduled-time"
+                    type="time"
+                    value={form.scheduledTime}
+                    onChange={(event) =>
+                      updateForm("scheduledTime", event.target.value)
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-reminder-time">Reminder</Label>
+                  <Input
+                    id="detail-reminder-time"
+                    type="time"
+                    value={form.reminderTime}
+                    onChange={(event) =>
+                      updateForm("reminderTime", event.target.value)
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-deadline-time">Deadline</Label>
+                  <Input
+                    id="detail-deadline-time"
+                    type="time"
+                    value={form.checkInDeadline}
+                    onChange={(event) =>
+                      updateForm("checkInDeadline", event.target.value)
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="detail-rules">What counts?</Label>
+                <Input
+                  id="detail-rules"
+                  value={form.rules}
+                  onChange={(event) => updateForm("rules", event.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="detail-motivation">Motivation</Label>
+                <Textarea
+                  id="detail-motivation"
+                  className="min-h-24"
+                  value={form.motivation}
+                  onChange={(event) =>
+                    updateForm("motivation", event.target.value)
+                  }
+                />
+              </div>
+
+              <label className="flex items-center gap-3 border-2 border-black bg-card px-4 py-3 text-sm uppercase">
+                <Checkbox
+                  checked={form.isActive}
+                  onCheckedChange={(value) =>
+                    updateForm("isActive", Boolean(value))
+                  }
+                />
+                <span>{form.isActive ? "Habit active" : "Habit paused"}</span>
+              </label>
+
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  disabled={
+                    saving ||
+                    !form.name.trim() ||
+                    form.targetDays.length === 0 ||
+                    !form.rules.trim() ||
+                    !form.motivation.trim()
+                  }
+                  onClick={() => void handleSave()}
+                >
+                  {saving ? "Saving..." : "Save changes"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <Card className="bg-background">
+          <CardHeader>
+            <CardTitle className="text-2xl">Schedule</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-3">
+            <div className="border-2 border-black bg-card p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Default scheduled
+              </p>
+              <p className="mt-2 text-2xl font-black">{habit.scheduledTime}</p>
+            </div>
+            <div className="border-2 border-black bg-card p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Default reminder
+              </p>
+              <p className="mt-2 text-2xl font-black">{habit.reminderTime}</p>
+            </div>
+            <div className="border-2 border-black bg-card p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Default deadline
+              </p>
+              <p className="mt-2 text-2xl font-black">
+                {habit.checkInDeadline}
+              </p>
+            </div>
+            <div className="sm:col-span-3 border-2 border-black bg-card p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Target days
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {habit.targetDays.map((day) => (
+                  <Badge
+                    key={`${habit._id}-detail-${day}`}
+                    variant="outline"
+                    className="border-foreground/55 bg-foreground/12 text-foreground"
+                  >
+                    {toTitleDay(day)}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-background">
+          <CardHeader>
+            <CardTitle className="text-2xl">Rules and Motivation</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="border-2 border-black bg-card p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Rules
+              </p>
+              <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
+                {habit.rules}
+              </p>
+            </div>
+            <div className="border-2 border-black bg-card p-4">
+              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                Motivation
+              </p>
+              <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
+                {habit.motivation}
+              </p>
+            </div>
+            {!habit.isActive ? (
+              <div className="brutal-alert p-4 text-sm uppercase tracking-[0.12em]">
+                This habit is paused. History stays intact, but reminders and
+                active scheduling are off until you resume it.
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-background">
+          <CardHeader>
+            <CardTitle className="text-2xl">This Week</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <WeekGrid
+              habit={currentHabit}
+              weekDays={weekDays}
+              weeklyCheckIns={weeklyCheckIns}
+              weeklySkips={weeklySkips}
+              weeklyReminderRuns={weeklyReminderRuns}
+              weeklyReminders={weeklyReminders}
+              referenceDate={referenceDate}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="bg-background">
+          <CardHeader>
+            <CardTitle className="text-2xl">Recent History</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            {recentHistory.length === 0 ? (
+              <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+                No check-ins yet for this habit.
+              </div>
+            ) : (
+              recentHistory.map((entry) => (
+                <div
+                  key={entry._id}
+                  className="border-2 border-black bg-card p-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-black uppercase tracking-[0.18em]">
+                      {entry.date}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline">
+                        {formatCheckInStatus(entry.status)}
+                      </Badge>
+                      <Badge variant="outline">{entry.source}</Badge>
+                    </div>
+                  </div>
+                  {entry.userReason ? (
+                    <p className="mt-3 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+                      Reason: {entry.userReason}
+                    </p>
+                  ) : null}
+                  {entry.conversationSummary ? (
+                    <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+                      {entry.conversationSummary}
+                    </p>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-background">
+          <CardHeader>
+            <CardTitle className="text-2xl">Recent Logs</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            {recentLogs.length === 0 ? (
+              <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+                No recent logs yet for this habit.
+              </div>
+            ) : (
+              recentLogs.map((log) => {
+                const checkIn = allCheckIns.find(
+                  (entry) => entry._id === log.checkInId,
+                );
+                return (
+                  <div
+                    key={log._id}
+                    className="border-2 border-black bg-card p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-sm font-black uppercase tracking-[0.18em]">
+                        {checkIn
+                          ? formatWorkoutDate(checkIn.timestamp)
+                          : "Unknown date"}
+                      </p>
+                      {checkIn ? (
+                        <Badge variant="outline">
+                          {formatCheckInStatus(checkIn.status)}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
+                      {formatExerciseSummary(log)}
+                    </p>
+                    {log.notes ? (
+                      <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
+                        {log.notes}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+        <DrawerContent className="max-h-[88vh] border-2 border-black bg-card">
+          <DrawerHeader className="px-4 pb-0 pt-2 text-left">
+            <DrawerTitle className="sr-only">Habit Detail</DrawerTitle>
+            <DrawerDescription className="sr-only">
+              Habit detail and editing controls.
+            </DrawerDescription>
+          </DrawerHeader>
+          <div className="overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-2">
+            {detailHeader}
+            {detailBody}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50">
       <button
@@ -4218,355 +4769,8 @@ function HabitDetailPanel({
         aria-label="Close habit detail"
       />
       <aside className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l-2 border-black bg-card p-6 shadow-[-8px_0px_0px_0px_rgba(26,24,20,1)]">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-3">
-            <p className="brutal-meta">Habit Detail</p>
-            <h2 className="text-4xl font-black uppercase tracking-[-0.08em]">
-              {habit.name}
-            </h2>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline">
-                {habit.isActive ? "Active" : "Paused"}
-              </Badge>
-              <Badge variant="outline">Streak {habit.currentStreak}</Badge>
-              <Badge variant="outline">Best {habit.bestStreak}</Badge>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsEditing((current) => !current)}
-            >
-              <PencilLine />
-              {isEditing ? "Cancel edit" : "Edit"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={onClose}
-            >
-              <X />
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-6">
-          {isEditing ? (
-            <Card className="bg-background">
-              <CardHeader>
-                <CardTitle className="text-2xl">Edit Habit</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-5">
-                <div className="grid gap-2">
-                  <Label htmlFor="detail-name">Habit name</Label>
-                  <Input
-                    id="detail-name"
-                    value={form.name}
-                    onChange={(event) => updateForm("name", event.target.value)}
-                  />
-                </div>
-
-                <div className="grid gap-3">
-                  <Label>Target days</Label>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {DAYS.map((day) => {
-                      const checked = form.targetDays.includes(day.key);
-                      return (
-                        <label
-                          key={day.key}
-                          className="flex items-center gap-3 border-2 border-black bg-card px-3 py-3 text-sm uppercase"
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(value) =>
-                              updateForm(
-                                "targetDays",
-                                value
-                                  ? [...form.targetDays, day.key]
-                                  : form.targetDays.filter(
-                                      (entry) => entry !== day.key,
-                                    ),
-                              )
-                            }
-                          />
-                          <span>{day.label}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div className="grid gap-2">
-                    <Label htmlFor="detail-scheduled-time">Scheduled</Label>
-                    <Input
-                      id="detail-scheduled-time"
-                      type="time"
-                      value={form.scheduledTime}
-                      onChange={(event) =>
-                        updateForm("scheduledTime", event.target.value)
-                      }
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="detail-reminder-time">Reminder</Label>
-                    <Input
-                      id="detail-reminder-time"
-                      type="time"
-                      value={form.reminderTime}
-                      onChange={(event) =>
-                        updateForm("reminderTime", event.target.value)
-                      }
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="detail-deadline-time">Deadline</Label>
-                    <Input
-                      id="detail-deadline-time"
-                      type="time"
-                      value={form.checkInDeadline}
-                      onChange={(event) =>
-                        updateForm("checkInDeadline", event.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="detail-rules">What counts?</Label>
-                  <Input
-                    id="detail-rules"
-                    value={form.rules}
-                    onChange={(event) =>
-                      updateForm("rules", event.target.value)
-                    }
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="detail-motivation">Motivation</Label>
-                  <Textarea
-                    id="detail-motivation"
-                    className="min-h-24"
-                    value={form.motivation}
-                    onChange={(event) =>
-                      updateForm("motivation", event.target.value)
-                    }
-                  />
-                </div>
-
-                <label className="flex items-center gap-3 border-2 border-black bg-card px-4 py-3 text-sm uppercase">
-                  <Checkbox
-                    checked={form.isActive}
-                    onCheckedChange={(value) =>
-                      updateForm("isActive", Boolean(value))
-                    }
-                  />
-                  <span>{form.isActive ? "Habit active" : "Habit paused"}</span>
-                </label>
-
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    disabled={
-                      saving ||
-                      !form.name.trim() ||
-                      form.targetDays.length === 0 ||
-                      !form.rules.trim() ||
-                      !form.motivation.trim()
-                    }
-                    onClick={() => void handleSave()}
-                  >
-                    {saving ? "Saving..." : "Save changes"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <Card className="bg-background">
-            <CardHeader>
-              <CardTitle className="text-2xl">Schedule</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 sm:grid-cols-3">
-              <div className="border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Default scheduled
-                </p>
-                <p className="mt-2 text-2xl font-black">
-                  {habit.scheduledTime}
-                </p>
-              </div>
-              <div className="border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Default reminder
-                </p>
-                <p className="mt-2 text-2xl font-black">{habit.reminderTime}</p>
-              </div>
-              <div className="border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Default deadline
-                </p>
-                <p className="mt-2 text-2xl font-black">
-                  {habit.checkInDeadline}
-                </p>
-              </div>
-              <div className="sm:col-span-3 border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Target days
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {habit.targetDays.map((day) => (
-                    <Badge
-                      key={`${habit._id}-detail-${day}`}
-                      variant="outline"
-                      className="border-foreground/55 bg-foreground/12 text-foreground"
-                    >
-                      {toTitleDay(day)}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-background">
-            <CardHeader>
-              <CardTitle className="text-2xl">Rules and Motivation</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <div className="border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Rules
-                </p>
-                <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
-                  {habit.rules}
-                </p>
-              </div>
-              <div className="border-2 border-black bg-card p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                  Motivation
-                </p>
-                <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
-                  {habit.motivation}
-                </p>
-              </div>
-              {!habit.isActive ? (
-                <div className="brutal-alert p-4 text-sm uppercase tracking-[0.12em]">
-                  This habit is paused. History stays intact, but reminders and
-                  active scheduling are off until you resume it.
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="bg-background">
-            <CardHeader>
-              <CardTitle className="text-2xl">This Week</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <WeekGrid
-                habit={currentHabit}
-                weekDays={weekDays}
-                weeklyCheckIns={weeklyCheckIns}
-                weeklySkips={weeklySkips}
-                weeklyReminderRuns={weeklyReminderRuns}
-                weeklyReminders={weeklyReminders}
-                referenceDate={referenceDate}
-              />
-            </CardContent>
-          </Card>
-
-          <Card className="bg-background">
-            <CardHeader>
-              <CardTitle className="text-2xl">Recent History</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              {recentHistory.length === 0 ? (
-                <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                  No check-ins yet for this habit.
-                </div>
-              ) : (
-                recentHistory.map((entry) => (
-                  <div
-                    key={entry._id}
-                    className="border-2 border-black bg-card p-4"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-sm font-black uppercase tracking-[0.18em]">
-                        {entry.date}
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant="outline">
-                          {formatCheckInStatus(entry.status)}
-                        </Badge>
-                        <Badge variant="outline">{entry.source}</Badge>
-                      </div>
-                    </div>
-                    {entry.userReason ? (
-                      <p className="mt-3 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                        Reason: {entry.userReason}
-                      </p>
-                    ) : null}
-                    {entry.conversationSummary ? (
-                      <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                        {entry.conversationSummary}
-                      </p>
-                    ) : null}
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="bg-background">
-            <CardHeader>
-              <CardTitle className="text-2xl">Recent Logs</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              {recentLogs.length === 0 ? (
-                <div className="border-2 border-dashed border-black bg-card p-4 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                  No recent logs yet for this habit.
-                </div>
-              ) : (
-                recentLogs.map((log) => {
-                  const checkIn = allCheckIns.find(
-                    (entry) => entry._id === log.checkInId,
-                  );
-                  return (
-                    <div
-                      key={log._id}
-                      className="border-2 border-black bg-card p-4"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm font-black uppercase tracking-[0.18em]">
-                          {checkIn
-                            ? formatWorkoutDate(checkIn.timestamp)
-                            : "Unknown date"}
-                        </p>
-                        {checkIn ? (
-                          <Badge variant="outline">
-                            {formatCheckInStatus(checkIn.status)}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <p className="mt-2 text-sm uppercase tracking-[0.12em] text-foreground">
-                        {formatExerciseSummary(log)}
-                      </p>
-                      {log.notes ? (
-                        <p className="mt-2 text-sm uppercase tracking-[0.12em] text-muted-foreground">
-                          {log.notes}
-                        </p>
-                      ) : null}
-                    </div>
-                  );
-                })
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        {detailHeader}
+        {detailBody}
       </aside>
     </div>
   );
@@ -5591,9 +5795,11 @@ export function DashboardShell() {
         body: "{}",
       });
 
-      const payload = (await response.json().catch(() => null)) as
-        | { ok?: boolean; reason?: string; url?: string }
-        | null;
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        reason?: string;
+        url?: string;
+      } | null;
 
       if (!response.ok || !payload?.url) {
         window.location.href = "/plans";
@@ -5673,9 +5879,9 @@ export function DashboardShell() {
   }
 
   return (
-    <main className="min-h-screen bg-background px-6 py-8 text-foreground">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-28">
-        <section className="border-2 border-black bg-card p-6 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-8">
+    <main className="min-h-screen bg-background px-4 py-6 text-foreground sm:px-6 sm:py-8">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
+        <section className="border-2 border-black bg-card p-4 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-6 lg:p-8">
           <SummaryStatusCard
             snapshots={habitSnapshots}
             tasks={resolvedAgentTasks}
@@ -5780,7 +5986,10 @@ export function DashboardShell() {
         onSave={handleSaveHabitDetail}
       />
 
-      <nav className="fixed inset-x-0 bottom-0 bg-transparent px-4 py-4">
+      <nav
+        className="fixed inset-x-0 bottom-0 bg-transparent px-4 pt-4"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
+      >
         <AnimatedDock
           className="max-w-4xl"
           items={[
