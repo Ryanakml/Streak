@@ -4,23 +4,26 @@ import { NextResponse } from "next/server";
 
 import { polar, POLAR_ORGANIZATION_ID } from "@/lib/polar";
 
-function getSafeOrigin(req: NextRequest) {
-  let origin = req.nextUrl.origin;
+function getSafeOrigin() {
+  const fallbackOrigin = "http://localhost:3000";
+  const envOriginRaw =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() || fallbackOrigin;
 
-  if (!origin || origin === "null") {
-    origin = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const normalizedOrigin =
+    envOriginRaw.startsWith("http://") || envOriginRaw.startsWith("https://")
+      ? envOriginRaw
+      : envOriginRaw.includes("localhost")
+        ? `http://${envOriginRaw}`
+        : `https://${envOriginRaw}`;
+
+  try {
+    return new URL(normalizedOrigin).origin;
+  } catch {
+    return fallbackOrigin;
   }
-
-  if (!origin.startsWith("http://") && !origin.startsWith("https://")) {
-    origin = origin.includes("localhost")
-      ? `http://${origin}`
-      : `https://${origin}`;
-  }
-
-  return origin;
 }
 
-export async function GET(req: NextRequest) {
+export async function POST(req: NextRequest) {
   const { userId } = await auth();
 
   if (!userId) {
@@ -30,7 +33,21 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const productId = req.nextUrl.searchParams.get("productId");
+  const contentType = req.headers.get("content-type") || "";
+  let productId: string | null = null;
+
+  if (contentType.includes("application/json")) {
+    const body = (await req.json().catch(() => null)) as {
+      productId?: unknown;
+    } | null;
+    productId = typeof body?.productId === "string" ? body.productId : null;
+  } else {
+    const formData = await req.formData().catch(() => null);
+    const formValue = formData?.get("productId");
+    productId = typeof formValue === "string" ? formValue : null;
+  }
+
+  productId = productId?.trim() || null;
   if (!productId) {
     return NextResponse.json(
       { error: "Product ID is required" },
@@ -48,7 +65,7 @@ export async function GET(req: NextRequest) {
 
   const client = await clerkClient();
   const user = await client.users.getUser(userId);
-  const safeOrigin = getSafeOrigin(req);
+  const safeOrigin = getSafeOrigin();
   const successUrl = new URL(
     "/dashboard?billing=success",
     safeOrigin,

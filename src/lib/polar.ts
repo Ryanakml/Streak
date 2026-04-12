@@ -13,7 +13,7 @@ if (!polarOrganizationId) {
 
 export const polar = new Polar({
   accessToken: polarAccessToken,
-  server: "sandbox",
+  server: process.env.NODE_ENV === "production" ? "production" : "sandbox",
 });
 
 export const POLAR_ORGANIZATION_ID = polarOrganizationId;

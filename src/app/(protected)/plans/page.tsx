@@ -107,7 +107,7 @@ export default async function PlansPage() {
                     <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
                       Sandbox checkout
                     </span>
-                    <form action="/api/billing/upgrade" method="get">
+                    <form action="/api/billing/upgrade" method="post">
                       <input
                         type="hidden"
                         name="productId"
