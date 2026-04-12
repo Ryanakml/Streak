@@ -1,5 +1,16 @@
 # Streak
 
+<div align="center">
+  <img src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" alt="Next.js" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
+  <img src="https://img.shields.io/badge/Convex-Realtime-EE4444?style=for-the-badge&logo=convex" alt="Convex" />
+  <img src="https://img.shields.io/badge/Auth-Clerk-6C47FF?style=for-the-badge&logo=clerk" alt="Clerk" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+</div>
+
+
+<br />
+
 ![Streak Mockup](public/mockup.png)
 
 Streak is an AI accountability habit tracker. It combines a normal habit dashboard with an AI coach, reminders, push notifications, streak tracking, and weekly readouts so a user can define a habit, get pushed at the right time, log the result, and review the pattern later.

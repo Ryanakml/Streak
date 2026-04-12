@@ -18,6 +18,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { api } from "../../../convex/_generated/api";
+import { cn } from "@/lib/utils";
 import {
   CalendarDays,
   ChartNoAxesColumn,
@@ -1145,28 +1146,45 @@ function CreateItemMenu({
   disableHabitCreation,
   onCreateHabit,
   onCreateTask,
+  onOpenChange,
 }: {
   disableHabitCreation: boolean;
   onCreateHabit: (form: HabitFormState) => Promise<void>;
   onCreateTask: (form: TaskFormState) => Promise<void>;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [habitOpen, setHabitOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
 
+  function handleMenuChange(open: boolean) {
+    setMenuOpen(open);
+    onOpenChange?.(open || habitOpen || taskOpen);
+  }
+
+  function handleHabitChange(open: boolean) {
+    setHabitOpen(open);
+    onOpenChange?.(open || menuOpen || taskOpen);
+  }
+
+  function handleTaskChange(open: boolean) {
+    setTaskOpen(open);
+    onOpenChange?.(open || menuOpen || habitOpen);
+  }
+
   function openHabitDialog() {
     setMenuOpen(false);
-    setTimeout(() => setHabitOpen(true), 0);
+    setTimeout(() => handleHabitChange(true), 0);
   }
 
   function openTaskDialog() {
     setMenuOpen(false);
-    setTimeout(() => setTaskOpen(true), 0);
+    setTimeout(() => handleTaskChange(true), 0);
   }
 
   return (
     <div className="ml-auto flex items-center">
-      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <DropdownMenu open={menuOpen} onOpenChange={handleMenuChange}>
         <DropdownMenuTrigger className="inline-flex h-10 items-center gap-2 border-2 border-black bg-black px-5 py-2 text-sm font-medium uppercase tracking-[0.24em] text-white shadow-[4px_4px_0_0_#1a1a1a]">
           <Plus className="size-4" />
           New
@@ -1185,14 +1203,14 @@ function CreateItemMenu({
         disabled={disableHabitCreation}
         onCreate={onCreateHabit}
         open={habitOpen}
-        onOpenChange={setHabitOpen}
+        onOpenChange={handleHabitChange}
         trigger={<span className="hidden" />}
       />
       <TaskComposerDialog
         disabled={false}
         onCreate={onCreateTask}
         open={taskOpen}
-        onOpenChange={setTaskOpen}
+        onOpenChange={handleTaskChange}
         trigger={<span className="hidden" />}
       />
     </div>
@@ -3025,6 +3043,7 @@ function HomeTab({
   canAddHabit,
   onCreateHabit,
   onCreateTask,
+  onCreateMenuOpenChange,
 }: {
   snapshots: HabitPressureSnapshot[];
   primarySnapshot: HabitPressureSnapshot | null;
@@ -3038,6 +3057,7 @@ function HomeTab({
   canAddHabit: boolean;
   onCreateHabit: (form: HabitFormState) => Promise<void>;
   onCreateTask: (form: TaskFormState) => Promise<void>;
+  onCreateMenuOpenChange?: (open: boolean) => void;
 }) {
   const orderedSnapshots = [...snapshots].sort(rankHabitSnapshots);
   const primaryId = primarySnapshot?.habit._id ?? null;
@@ -3070,6 +3090,7 @@ function HomeTab({
           disableHabitCreation={!canAddHabit}
           onCreateHabit={onCreateHabit}
           onCreateTask={onCreateTask}
+          onOpenChange={onCreateMenuOpenChange}
         />
       </div>
 
@@ -4537,7 +4558,6 @@ function HabitDetailPanel({
   allReminders,
   allWorkoutLogs,
   referenceDate,
-  saving,
   onClose,
   onSave,
 }: {
@@ -4554,52 +4574,114 @@ function HabitDetailPanel({
   onSave: (habit: HabitDoc, form: HabitDetailFormState) => Promise<void>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
-  const [form, setForm] = useState<HabitDetailFormState | null>(() =>
-    habit ? getHabitDetailInitialForm(habit) : null,
-  );
-  const isMobile = useIsMobile();
+  const [form, setForm] = useState<HabitDetailFormState | null>(null);
 
-  if (!open || !habit || !form) {
-    return null;
-  }
+  useEffect(() => {
+    if (open && habit) {
+      setForm(getHabitDetailInitialForm(habit));
+    } else if (!open) {
+      // Don't clear immediately to avoid flash during close animation
+      const timer = setTimeout(() => {
+        setForm(null);
+        setIsEditing(false);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [open, habit]);
+
+  const isMobile = useIsMobile();
 
   const currentHabit = habit;
   const currentForm = form;
 
-  const weekDays = getWeekDays(referenceDate);
-  const weekStart = weekDays[0]?.date ?? referenceDate;
-  const weekEnd = weekDays[6]?.date ?? referenceDate;
-  const weekStartTs = weekStart.getTime();
-  const weekEndTs = new Date(weekEnd).setHours(23, 59, 59, 999);
-  const weekDateKeys = new Set(weekDays.map((day) => day.dateKey));
-  const habitCheckIns = allCheckIns
-    .filter((entry) => entry.habitId === habit._id)
-    .sort((left, right) => right.timestamp - left.timestamp);
-  const weeklyCheckIns = habitCheckIns.filter(
-    (entry) => entry.timestamp >= weekStartTs && entry.timestamp <= weekEndTs,
-  );
-  const weeklySkips = allHabitSkips.filter(
-    (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
-  );
-  const weeklyReminderRuns = allReminderRuns.filter(
-    (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
-  );
-  const weeklyReminders = allReminders.filter(
-    (entry) => entry.habitId === habit._id && weekDateKeys.has(entry.date),
-  );
-  const recentLogs = allWorkoutLogs
-    .filter((log) => log.habitId === habit._id)
-    .sort((left, right) => {
-      const leftCheckIn = allCheckIns.find(
-        (entry) => entry._id === left.checkInId,
-      );
-      const rightCheckIn = allCheckIns.find(
-        (entry) => entry._id === right.checkInId,
-      );
-      return (rightCheckIn?.timestamp ?? 0) - (leftCheckIn?.timestamp ?? 0);
-    })
-    .slice(0, 5);
-  const recentHistory = habitCheckIns.slice(0, 8);
+  const {
+    weekDays,
+    habitCheckIns,
+    weeklyCheckIns,
+    weeklySkips,
+    weeklyReminderRuns,
+    weeklyReminders,
+    recentLogs,
+    recentHistory,
+  } = useMemo(() => {
+    if (!habit) {
+      return {
+        weekDays: [],
+        habitCheckIns: [],
+        weeklyCheckIns: [],
+        weeklySkips: [],
+        weeklyReminderRuns: [],
+        weeklyReminders: [],
+        recentLogs: [],
+        recentHistory: [],
+      };
+    }
+
+    const days = getWeekDays(referenceDate);
+    const start = days[0]?.date ?? referenceDate;
+    const end = days[6]?.date ?? referenceDate;
+    const startTs = start.getTime();
+    const endTs = new Date(end).setHours(23, 59, 59, 999);
+    const dateKeys = new Set(days.map((day) => day.dateKey));
+
+    const hCheckIns = allCheckIns
+      .filter((entry) => entry.habitId === habit._id)
+      .sort((left, right) => right.timestamp - left.timestamp);
+
+    const wCheckIns = hCheckIns.filter(
+      (entry) => entry.timestamp >= startTs && entry.timestamp <= endTs,
+    );
+
+    const wSkips = allHabitSkips.filter(
+      (entry) => entry.habitId === habit._id && dateKeys.has(entry.date),
+    );
+
+    const wReminderRuns = allReminderRuns.filter(
+      (entry) => entry.habitId === habit._id && dateKeys.has(entry.date),
+    );
+
+    const wReminders = allReminders.filter(
+      (entry) => entry.habitId === habit._id && dateKeys.has(entry.date),
+    );
+
+    const rLogs = allWorkoutLogs
+      .filter((log) => log.habitId === habit._id)
+      .sort((left, right) => {
+        const leftCheckIn = allCheckIns.find(
+          (entry) => entry._id === left.checkInId,
+        );
+        const rightCheckIn = allCheckIns.find(
+          (entry) => entry._id === right.checkInId,
+        );
+        return (rightCheckIn?.timestamp ?? 0) - (leftCheckIn?.timestamp ?? 0);
+      })
+      .slice(0, 5);
+
+    const rHistory = hCheckIns.slice(0, 8);
+
+    return {
+      weekDays: days,
+      habitCheckIns: hCheckIns,
+      weeklyCheckIns: wCheckIns,
+      weeklySkips: wSkips,
+      weeklyReminderRuns: wReminderRuns,
+      weeklyReminders: wReminders,
+      recentLogs: rLogs,
+      recentHistory: rHistory,
+    };
+  }, [
+    habit,
+    allCheckIns,
+    allHabitSkips,
+    allReminderRuns,
+    allReminders,
+    allWorkoutLogs,
+    referenceDate,
+  ]);
+
+  if (!habit || !form) {
+    return null;
+  }
 
   async function handleSave() {
     await onSave(currentHabit, currentForm);
@@ -4984,7 +5066,9 @@ function HabitDetailPanel({
     return (
       <Drawer
         open={open}
-        onOpenChange={(nextOpen) => !nextOpen && onClose()}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) onClose();
+        }}
         shouldScaleBackground={false}
       >
         <DrawerContent className="max-h-[88vh] border-2 border-black bg-card">
@@ -5374,6 +5458,8 @@ export function DashboardShell() {
   const [lastSeenReminderTimestamp, setLastSeenReminderTimestamp] = useState(0);
   const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
   const [detailSaving, setDetailSaving] = useState(false);
+  const [isHabitDetailOpen, setIsHabitDetailOpen] = useState(false);
+  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
   const [chatErrorMessage, setChatErrorMessage] = useState<string | null>(null);
   const [upgradePending, setUpgradePending] = useState(false);
 
@@ -5687,9 +5773,12 @@ export function DashboardShell() {
   const resolvedAgentTasks = useMemo(() => agentTasks ?? [], [agentTasks]);
   const resolvedMessageBudgetStatus = messageBudgetStatus ?? null;
   const latestWeeklyReport = resolvedWeeklyReports[0] ?? null;
-  const selectedHabit =
-    resolvedHabits.find((habit: HabitDoc) => habit._id === selectedHabitId) ??
-    null;
+  const selectedHabit = useMemo(
+    () =>
+      resolvedHabits.find((habit: HabitDoc) => habit._id === selectedHabitId) ??
+      null,
+    [resolvedHabits, selectedHabitId],
+  );
   const reminderMessages = resolvedMessages.filter(
     (message: MessageDoc) =>
       message.role === "ai" && isReminderIntent(message.intent),
@@ -6173,6 +6262,7 @@ export function DashboardShell() {
             canAddHabit={!freeTierLimitReached}
             onCreateHabit={createHabitFromForm}
             onCreateTask={createTaskFromForm}
+            onCreateMenuOpenChange={setIsCreateMenuOpen}
           />
         ) : null}
 
@@ -6237,7 +6327,6 @@ export function DashboardShell() {
       </div>
 
       <HabitDetailPanel
-        key={selectedHabit?._id ?? "no-habit"}
         open={Boolean(selectedHabit)}
         habit={selectedHabit}
         allCheckIns={resolvedAllCheckIns}
@@ -6252,7 +6341,11 @@ export function DashboardShell() {
       />
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-[100] bg-transparent px-4 pt-4"
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-[100] bg-transparent px-4 pt-4 transition-all duration-300 ease-in-out",
+          (Boolean(selectedHabit) || isCreateMenuOpen) &&
+            "pointer-events-none translate-y-full opacity-0",
+        )}
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
       >
         <AnimatedDock
