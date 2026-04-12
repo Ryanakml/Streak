@@ -2253,175 +2253,182 @@ function SummaryStatusCard({
 
   return (
     <div
-      className={`grid gap-4 ${highlightCards.length > 0 ? "md:grid-cols-[0.88fr_1.12fr]" : "md:grid-cols-1"}`}
+      className={`grid gap-3 sm:gap-4 ${highlightCards.length > 0 ? "md:grid-cols-[0.85fr_1.15fr]" : "md:grid-cols-1"}`}
     >
-      <div className="space-y-2 border-2 border-black bg-secondary p-4 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)] sm:p-5">
+      <div className="space-y-1.5 border-2 border-black bg-secondary p-3.5 shadow-[6px_6px_0px_0px_rgba(26,24,20,1)] sm:space-y-2 sm:p-5">
         <p className="brutal-meta">Streak</p>
-        <h1 className="text-[clamp(2rem,8vw,3.75rem)] font-black uppercase tracking-[-0.08em]">
+        <h1 className="text-[clamp(1.75rem,7vw,3rem)] font-black uppercase tracking-[-0.08em] sm:text-[clamp(2rem,8vw,3.75rem)]">
           {formatToday(currentTime)}
         </h1>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-black pt-3">
-          <p className="text-base font-black uppercase tracking-[0.22em] text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-black pt-2.5 sm:pt-3">
+          <p className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground sm:text-base">
             {formatTime(currentTime)}
           </p>
-          <Badge className="bg-black text-white">
+          <Badge className="bg-black text-[10px] text-white sm:text-xs">
             {subscriptionTier.toUpperCase()}
           </Badge>
         </div>
       </div>
 
       {highlightCards.length > 0 ? (
-        <div
-          className={`relative min-h-[240px] touch-pan-y select-none sm:min-h-[280px] md:min-h-[300px] ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          onPointerLeave={handlePointerUp}
-          onWheel={handleWheel}
-        >
-          {orderedCards.map((card, index) => {
-            const translateX =
-              index === 0
-                ? isExiting
-                  ? exitDirection * 320
-                  : dragOffset
-                : index * 24;
-            const scale = index === 0 ? 1 : 0.985 - Math.min(index, 2) * 0.02;
-            const opacity =
-              index > 2 ? 0 : index === 0 ? 1 : 0.88 - index * 0.1;
-            const zIndex = 50 - index;
-            const transitionClass =
-              index === 0
-                ? isDragging
-                  ? "duration-0"
-                  : isExiting
-                    ? "duration-200"
-                    : "duration-200"
-                : "duration-200";
+        <div className="relative min-h-[300px] sm:min-h-[340px] md:min-h-[360px]">
+          <div
+            className={`absolute inset-0 h-full w-full touch-pan-y select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+            onWheel={handleWheel}
+          >
+            {orderedCards.map((card, index) => {
+              // Hide cards beyond the 2nd on mobile to save space
+              const isHiddenOnMobile = index > 1;
 
-            return (
-              <div
-                key={card.id}
-                onClick={() => {
-                  if (index > 0) {
-                    setFrontCardIndex((current) => current + index);
-                  }
-                }}
-                className={`absolute left-0 top-0 w-[calc(100%-2rem)] border-2 p-4 text-left shadow-[6px_6px_0px_0px_rgba(26,24,20,0.22)] transition-[transform,opacity] sm:w-[calc(100%-2.5rem)] sm:p-5 sm:shadow-[8px_8px_0px_0px_rgba(26,24,20,0.28)] ${transitionClass} ${index > 0 ? "cursor-pointer" : ""} ${card.toneClassName}`}
-                style={{
-                  transform: `translate3d(${translateX}px, 0, 0) scale(${scale})`,
-                  zIndex,
-                  opacity,
-                }}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-current/15 pb-3 sm:gap-4 sm:pb-4">
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`inline-flex items-center border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${card.badgeClassName}`}
+              const translateX =
+                index === 0
+                  ? isExiting
+                    ? exitDirection * 320
+                    : dragOffset
+                  : index * 16;
+              const scale = index === 0 ? 1 : 0.985 - Math.min(index, 2) * 0.02;
+              const opacity =
+                index > 2 ? 0 : index === 0 ? 1 : 0.88 - index * 0.1;
+              const zIndex = 50 - index;
+              const transitionClass =
+                index === 0
+                  ? isDragging
+                    ? "duration-0"
+                    : isExiting
+                      ? "duration-200"
+                      : "duration-200"
+                  : "duration-200";
+
+              return (
+                <div
+                  key={card.id}
+                  onClick={() => {
+                    if (index > 0) {
+                      setFrontCardIndex((current) => current + index);
+                    }
+                  }}
+                  className={`absolute left-0 top-0 w-[calc(100%-1.25rem)] border-2 p-3.5 text-left shadow-[4px_4px_0px_0px_rgba(26,24,20,0.22)] transition-[transform,opacity] sm:w-[calc(100%-2.5rem)] sm:p-5 sm:shadow-[8px_8px_0px_0px_rgba(26,24,20,0.28)] ${transitionClass} ${index > 0 ? "cursor-pointer" : ""} ${card.toneClassName} ${isHiddenOnMobile ? "hidden sm:block" : ""}`}
+                  style={{
+                    transform: `translate3d(${translateX}px, 0, 0) scale(${scale})`,
+                    zIndex,
+                    opacity,
+                  }}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2.5 border-b-2 border-current/15 pb-2.5 sm:gap-4 sm:pb-4">
+                    <div className="min-w-0 flex-1 space-y-1.5 sm:space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`inline-flex items-center border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.22em] sm:px-2.5 sm:py-1 sm:text-[10px] ${card.badgeClassName}`}
+                        >
+                          {card.label}
+                        </span>
+                      </div>
+                      <p className="text-[clamp(1.1rem,4.8vw,1.6rem)] font-black uppercase tracking-[-0.05em] sm:text-[clamp(1.35rem,6vw,1.875rem)]">
+                        {card.title}
+                      </p>
+                      <p
+                        className={`text-[9px] font-bold uppercase tracking-[0.18em] opacity-75 sm:hidden ${card.toneTextClassName}`}
                       >
-                        {card.label}
-                      </span>
+                        {card.meta[0] ?? card.countLabel}
+                      </p>
                     </div>
-                    <p className="text-[clamp(1.15rem,5.2vw,1.875rem)] font-black uppercase tracking-[-0.05em] sm:text-[clamp(1.35rem,6vw,1.875rem)]">
-                      {card.title}
-                    </p>
-                    <p
-                      className={`text-[10px] font-bold uppercase tracking-[0.18em] opacity-75 sm:hidden ${card.toneTextClassName}`}
-                    >
-                      {card.meta[0] ?? card.countLabel}
-                    </p>
+                    <div className="hidden w-full border-2 border-current/20 bg-background/35 p-3 text-left sm:block sm:min-w-[112px] sm:w-auto sm:text-right">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80">
+                        Today
+                      </p>
+                      <p className="mt-2 text-2xl font-black sm:text-3xl">
+                        {scheduledToday > 0
+                          ? `${completedToday}/${scheduledToday}`
+                          : "0/0"}
+                      </p>
+                      <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] opacity-70">
+                        {card.countLabel}
+                      </p>
+                    </div>
                   </div>
-                  <div className="hidden w-full border-2 border-current/20 bg-background/35 p-3 text-left sm:block sm:min-w-[112px] sm:w-auto sm:text-right">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80">
-                      Today
-                    </p>
-                    <p className="mt-2 text-2xl font-black sm:text-3xl">
-                      {scheduledToday > 0
-                        ? `${completedToday}/${scheduledToday}`
-                        : "0/0"}
-                    </p>
-                    <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] opacity-70">
-                      {card.countLabel}
-                    </p>
-                  </div>
-                </div>
 
-                <div className="grid gap-3 pt-3 sm:gap-4 sm:pt-4 lg:grid-cols-[1fr_auto] lg:items-end">
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 gap-2 border-2 border-current/20 bg-background/35 p-2.5 sm:hidden">
-                      <div>
-                        <p className="text-[9px] font-bold uppercase tracking-[0.18em] opacity-70">
-                          Today
-                        </p>
-                        <p className="mt-1 text-xl font-black">
-                          {scheduledToday > 0
-                            ? `${completedToday}/${scheduledToday}`
-                            : "0/0"}
-                        </p>
+                  <div className="grid gap-2.5 pt-2.5 sm:gap-4 sm:pt-4 lg:grid-cols-[1fr_auto] lg:items-end">
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2 border-2 border-current/20 bg-background/35 p-2 sm:hidden">
+                        <div>
+                          <p className="text-[8px] font-bold uppercase tracking-[0.18em] opacity-70">
+                            Today
+                          </p>
+                          <p className="mt-0.5 text-lg font-black">
+                            {scheduledToday > 0
+                              ? `${completedToday}/${scheduledToday}`
+                              : "0/0"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[8px] font-bold uppercase tracking-[0.18em] opacity-70">
+                            Status
+                          </p>
+                          <p className="mt-0.5 text-[10px] font-black uppercase tracking-[0.14em]">
+                            {card.countLabel}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-[9px] font-bold uppercase tracking-[0.18em] opacity-70">
-                          Status
-                        </p>
-                        <p className="mt-1 text-sm font-black uppercase tracking-[0.14em]">
-                          {card.countLabel}
-                        </p>
-                      </div>
+                      <p
+                        className={`hidden text-[11px] font-bold uppercase tracking-[0.18em] opacity-80 sm:block ${card.toneTextClassName}`}
+                      >
+                        {card.meta.join(" · ")}
+                      </p>
+                      <p
+                        className={`hidden max-w-2xl text-sm leading-5 opacity-90 sm:block sm:leading-6 ${card.toneTextClassName}`}
+                      >
+                        {card.support}
+                      </p>
+                      {card.kind === "habit" ? (
+                        <div className="hidden sm:block">
+                          <CountdownMeter snapshot={card.snapshot} compact />
+                        </div>
+                      ) : null}
                     </div>
-                    <p
-                      className={`hidden text-[11px] font-bold uppercase tracking-[0.18em] opacity-80 sm:block ${card.toneTextClassName}`}
-                    >
-                      {card.meta.join(" · ")}
-                    </p>
-                    <p
-                      className={`hidden max-w-2xl text-sm leading-5 opacity-90 sm:block sm:leading-6 ${card.toneTextClassName}`}
-                    >
-                      {card.support}
-                    </p>
-                    {card.kind === "habit" ? (
-                      <div className="hidden sm:block">
-                        <CountdownMeter snapshot={card.snapshot} compact />
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
-                    {card.kind === "task" ? (
+                    <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
+                      {card.kind === "task" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={
+                            card.task.status === "done"
+                              ? "secondary"
+                              : "default"
+                          }
+                          disabled={index !== 0 || card.task.status === "done"}
+                          className="h-9 w-full sm:h-11 sm:w-auto"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void onTaskMarkDone(card.task);
+                          }}
+                        >
+                          Mark done
+                        </Button>
+                      ) : null}
                       <Button
                         type="button"
-                        size="lg"
-                        variant={
-                          card.task.status === "done" ? "secondary" : "default"
-                        }
-                        disabled={index !== 0 || card.task.status === "done"}
-                        className="w-full sm:w-auto"
+                        size="sm"
+                        variant={card.kind === "task" ? "outline" : "default"}
+                        disabled={index !== 0}
+                        className="h-9 w-full sm:h-11 sm:w-auto"
                         onClick={(event) => {
                           event.stopPropagation();
-                          void onTaskMarkDone(card.task);
+                          onPrimaryAction(card);
                         }}
                       >
-                        Mark done
+                        {card.actionLabel}
                       </Button>
-                    ) : null}
-                    <Button
-                      type="button"
-                      size="lg"
-                      variant={card.kind === "task" ? "outline" : "default"}
-                      disabled={index !== 0}
-                      className="w-full sm:w-auto"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onPrimaryAction(card);
-                      }}
-                    >
-                      {card.actionLabel}
-                    </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       ) : null}
     </div>
@@ -2507,34 +2514,38 @@ function HomeHabitCard({
             </div>
           </div>
 
-          <div className="grid gap-2 sm:flex sm:flex-wrap md:justify-end">
+          <div className="flex w-full items-center gap-2 md:w-auto md:justify-end">
             <Button
               type="button"
               variant="outline"
               onClick={() => onOpenDetail(habit)}
-              className="min-h-11 w-full sm:w-auto"
+              className="min-h-11 flex-1 md:w-auto md:flex-none"
             >
               <PencilLine />
               Details
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onOpenChat}
-              className="min-h-11 w-full sm:w-auto"
-            >
-              <MessageSquare />
-              Chat
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onToggleActive(habit)}
-              disabled={pendingHabitId === habit._id}
-              className="min-h-11 w-full sm:w-auto"
-            >
-              {habit.isActive ? "Pause" : "Resume"}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger>
+                <div className="inline-flex cursor-pointer items-center justify-center rounded-md border-2 border-black bg-background p-2 transition-colors hover:bg-accent hover:text-accent-foreground sm:size-11">
+                  <Ellipsis />
+                  <span className="sr-only">More actions</span>
+                </div>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={onOpenChat} className="h-11">
+                  <MessageSquare className="mr-2 size-4" />
+                  Chat with agent
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => void onToggleActive(habit)}
+                  disabled={pendingHabitId === habit._id}
+                  className="h-11"
+                >
+                  <MoonStar className="mr-2 size-4" />
+                  {habit.isActive ? "Pause tracking" : "Resume tracking"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </CardContent>
       </Card>
@@ -2850,60 +2861,85 @@ function CoachContextRail({
   onLoadPrompt: (value: string) => void;
 }) {
   return (
-    <div
-      className={`sticky top-4 z-10 grid gap-3 border-2 px-4 py-3 shadow-[6px_6px_0px_0px_rgba(26,24,20,0.15)] ${
-        snapshot?.panelClassName ?? "border-black bg-secondary text-foreground"
-      }`}
-    >
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-        <div className="min-w-0 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="brutal-meta text-current">Coach context</p>
-            {snapshot ? <PressureBadge snapshot={snapshot} /> : null}
-          </div>
-          <p
-            className={`truncate text-xl font-black uppercase tracking-[-0.05em] ${snapshot?.panelToneClassName ?? ""}`}
-          >
-            {snapshot ? snapshot.habit.name : "No target habit today"}
-          </p>
-          <p
-            className={`text-sm leading-6 opacity-80 ${snapshot?.panelToneClassName ?? ""}`}
-          >
-            {snapshot?.support ??
-              "Use this space for bonus logs, planning, or review."}
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 lg:items-end">
-          {snapshot ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onLoadPrompt(snapshot.chatPrompt)}
-            >
-              <Sparkles />
-              Load prompt
-            </Button>
-          ) : null}
-          {snapshot ? (
-            <div
-              className={`flex flex-wrap gap-3 text-[11px] font-black uppercase tracking-[0.18em] ${snapshot.panelToneClassName}`}
-            >
-              <span>
-                {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
-              </span>
-              <span>{snapshot.countdownLabel}</span>
-              <span>{snapshot.streakLabel}</span>
+    <div className="sticky top-0 z-40 -mx-4 mb-4 sm:-mx-5">
+      <div
+        className={`border-b-2 border-black px-3.5 py-3 shadow-[0px_4px_10px_0px_rgba(26,24,20,0.1)] sm:px-4 sm:py-4 ${
+          snapshot?.panelClassName ??
+          "border-black bg-secondary text-foreground"
+        }`}
+      >
+        <div className="grid gap-2.5 sm:gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+          <div className="min-w-0 space-y-1.5 sm:space-y-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="brutal-meta text-[10px] text-current sm:text-xs">
+                Coach context
+              </p>
+              {snapshot ? (
+                <div className="scale-90 origin-left sm:scale-100">
+                  <PressureBadge snapshot={snapshot} />
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-      </div>
-      {snapshot ? (
-        <div className="border-t-2 border-current/15 pt-3">
-          <div className="hidden sm:block">
-            <CountdownMeter snapshot={snapshot} compact />
+            <p
+              className={`truncate text-lg font-black uppercase tracking-[-0.05em] sm:text-2xl ${snapshot?.panelToneClassName ?? ""}`}
+            >
+              {snapshot ? snapshot.habit.name : "No target habit today"}
+            </p>
+            <p
+              className={`text-xs leading-5 opacity-85 sm:text-sm sm:leading-6 ${snapshot?.panelToneClassName ?? ""}`}
+            >
+              {snapshot?.support ??
+                "Use this space for bonus logs, planning, or review."}
+            </p>
+          </div>
+          <div className="flex flex-col gap-2.5 sm:gap-3 lg:items-end">
+            {snapshot ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onLoadPrompt(snapshot.chatPrompt)}
+                className="hidden h-9 w-full sm:flex sm:h-11 sm:w-auto"
+              >
+                <Sparkles className="size-4" />
+                Load prompt
+              </Button>
+            ) : null}
+            {snapshot ? (
+              <div
+                className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[9px] font-black uppercase tracking-[0.16em] sm:text-[11px] sm:tracking-[0.18em] ${snapshot.panelToneClassName}`}
+              >
+                <span className="border-b border-current/20 pb-0.5 sm:border-none sm:pb-0">
+                  {snapshot.nextTimeLabel}: {snapshot.nextTimeValue}
+                </span>
+                <span className="border-b border-current/20 pb-0.5 sm:border-none sm:pb-0">
+                  {snapshot.countdownLabel}
+                </span>
+                <span className="border-b border-current/20 pb-0.5 sm:border-none sm:pb-0">
+                  {snapshot.streakLabel}
+                </span>
+              </div>
+            ) : null}
           </div>
         </div>
-      ) : null}
+        {snapshot ? (
+          <div className="mt-3 border-t-2 border-current/15 pt-2.5 sm:mt-4 sm:pt-4">
+            <div className="hidden sm:block">
+              <CountdownMeter snapshot={snapshot} compact />
+            </div>
+            <div className="sm:hidden">
+              <div className="h-1.5 w-full bg-current/10">
+                <div
+                  className="h-full bg-current transition-all duration-500"
+                  style={{
+                    width: `${Math.max(5, snapshot.deadlineProgress ?? 0)}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -3469,22 +3505,65 @@ function ChatTab({
           </div>
 
           <div className="border-t-2 border-black/10 pt-1">
-            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
               Quick actions
             </p>
-            <div className="flex flex-wrap gap-2">
-              {quickActions.map((action) => (
-                <Button
-                  key={action.key}
-                  type="button"
-                  variant={action.variant}
-                  disabled={sending || limitReached}
-                  onClick={() => void action.onClick()}
-                >
-                  {action.icon}
-                  {action.label}
-                </Button>
-              ))}
+            <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 gap-2">
+                {quickActions.slice(0, 1).map((action) => (
+                  <Button
+                    key={action.key}
+                    type="button"
+                    variant={action.variant}
+                    disabled={sending || limitReached}
+                    onClick={() => void action.onClick()}
+                    className="h-10 flex-1 truncate px-3 text-xs sm:h-11 sm:flex-none sm:px-4 sm:text-sm"
+                  >
+                    {action.icon}
+                    <span className="truncate">{action.label}</span>
+                  </Button>
+                ))}
+                {quickActions.slice(1, 2).map((action) => (
+                  <Button
+                    key={action.key}
+                    type="button"
+                    variant={action.variant}
+                    disabled={sending || limitReached}
+                    onClick={() => void action.onClick()}
+                    className="hidden h-10 flex-1 truncate px-3 text-xs sm:inline-flex sm:h-11 sm:flex-none sm:px-4 sm:text-sm"
+                  >
+                    {action.icon}
+                    <span className="truncate">{action.label}</span>
+                  </Button>
+                ))}
+              </div>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger>
+                  <div className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-md border-2 border-black bg-background transition-colors hover:bg-accent hover:text-accent-foreground sm:h-11 sm:w-11">
+                    <Ellipsis className="size-4" />
+                    <span className="sr-only">More actions</span>
+                  </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  {quickActions.map((action, idx) => (
+                    <DropdownMenuItem
+                      key={action.key}
+                      onClick={() => void action.onClick()}
+                      disabled={sending || limitReached}
+                      className="h-11 cursor-pointer"
+                    >
+                      <div className="mr-2 opacity-70">{action.icon}</div>
+                      <span className="font-medium">{action.label}</span>
+                      {idx === 0 && (
+                        <span className="ml-auto text-[10px] uppercase tracking-wider opacity-40">
+                          Primary
+                        </span>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -3524,6 +3603,148 @@ function ChatTab({
   );
 }
 
+function HistoryContent({
+  historyRange,
+  setHistoryRange,
+  historyHabitId,
+  setHistoryHabitId,
+  activeHabits,
+  historyWeeks,
+  scrollAreaClassName,
+}: {
+  historyRange: StatsRangePreset;
+  setHistoryRange: (range: StatsRangePreset) => void;
+  historyHabitId: string;
+  setHistoryHabitId: (id: string) => void;
+  activeHabits: HabitDoc[];
+  historyWeeks: {
+    weekStartLabel: string;
+    days: {
+      dateKey: string;
+      dayLabel: string;
+      status:
+        | "perfect"
+        | "missed"
+        | "rest"
+        | "pending"
+        | "future"
+        | "inactive"
+        | "skipped";
+    }[];
+  }[];
+  scrollAreaClassName?: string;
+}) {
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              { key: "30d", label: "30D" },
+              { key: "90d", label: "90D" },
+              { key: "365d", label: "1Y" },
+              { key: "all", label: "ALL" },
+            ] as const
+          ).map((preset) => (
+            <Button
+              key={preset.key}
+              type="button"
+              size="sm"
+              variant={historyRange === preset.key ? "default" : "outline"}
+              onClick={() => setHistoryRange(preset.key)}
+            >
+              {preset.label}
+            </Button>
+          ))}
+        </div>
+
+        <div className="grid gap-2">
+          <Label
+            htmlFor="stats-history-modal-habit"
+            className="text-[10px] font-bold uppercase tracking-widest opacity-70"
+          >
+            Habit filter
+          </Label>
+          <select
+            id="stats-history-modal-habit"
+            value={historyHabitId}
+            onChange={(event) => setHistoryHabitId(event.target.value)}
+            className="h-9 min-w-40 border-2 border-black bg-background px-2 text-[10px] font-bold uppercase tracking-[0.08em]"
+          >
+            <option value="all">All active habits</option>
+            {activeHabits.map((habit) => (
+              <option key={habit._id} value={habit._id}>
+                {habit.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-[8px] font-bold uppercase tracking-[0.18em] sm:text-[10px]">
+        <span className="border-2 border-black bg-black px-2 py-0.5 text-white">
+          Done
+        </span>
+        <span className="border-2 border-[#DF3B23] bg-[#DF3B23] px-2 py-0.5 text-white">
+          Miss
+        </span>
+        <span className="border-2 border-black bg-background px-2 py-0.5">
+          Live
+        </span>
+        <span className="border-2 border-[#F7EFE1] bg-[#F7EFE1] px-2 py-0.5 text-[#7B5D3A]">
+          Skip
+        </span>
+      </div>
+
+      <div className={`space-y-2 overflow-y-auto pr-1 ${scrollAreaClassName}`}>
+        {historyWeeks.map((week, rowIndex) => (
+          <div
+            key={`${week.weekStartLabel}-${rowIndex}`}
+            className="grid grid-cols-[auto_1fr] items-stretch gap-1.5 sm:gap-2"
+          >
+            <div className="flex w-10 items-center justify-center border-2 border-black bg-secondary px-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-muted-foreground sm:w-14 sm:text-[10px] sm:tracking-[0.16em]">
+              {week.weekStartLabel}
+            </div>
+            <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+              {week.days.map((entry) => {
+                const style =
+                  entry.status === "missed"
+                    ? "bg-[#DF3B23] text-white border-black"
+                    : entry.status === "perfect"
+                      ? "bg-black text-white border-black"
+                      : entry.status === "pending"
+                        ? "bg-background text-foreground border-[3px] border-black"
+                        : entry.status === "future"
+                          ? "bg-background text-transparent border-dashed border-black/30"
+                          : entry.status === "inactive"
+                            ? "bg-background text-transparent border-dashed border-black/20 opacity-40"
+                            : entry.status === "skipped"
+                              ? "bg-[#F7EFE1] text-[#7B5D3A] border-[#B7925A]"
+                              : "bg-secondary text-muted-foreground/80 border-black/20";
+
+                return (
+                  <div
+                    key={entry.dateKey}
+                    title={`${entry.dayLabel} ${entry.dateKey}`}
+                    className={`grid min-h-10 border-2 p-1 text-center font-bold uppercase sm:min-h-12 sm:p-1.5 ${style}`}
+                  >
+                    <span className="text-[8px] sm:text-[9px]">
+                      {entry.dayLabel.charAt(0)}
+                    </span>
+                    <span className="mt-auto text-[9px] sm:text-[10px]">
+                      {entry.dateKey.slice(8)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StatsTab({
   habits,
   checkIns,
@@ -3548,6 +3769,7 @@ function StatsTab({
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyRange, setHistoryRange] = useState<StatsRangePreset>("90d");
   const [historyHabitId, setHistoryHabitId] = useState<string>("all");
+  const isMobile = useIsMobile();
 
   const weekDays = getWeekDays(referenceDate);
   const weekStart = weekDays[0]?.date ?? referenceDate;
@@ -3899,125 +4121,57 @@ function StatsTab({
         </div>
       </div>
 
-      <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
-        <DialogContent className="sm:max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="text-3xl">History Calendar</DialogTitle>
-            <DialogDescription className="text-muted-foreground uppercase tracking-[0.12em]">
-              MTWTFSS snapshot for{" "}
-              {formatStatsRangeLabel(historyRange).toLowerCase()}.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-4">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {(
-                  [
-                    { key: "30d", label: "30D" },
-                    { key: "90d", label: "90D" },
-                    { key: "365d", label: "1Y" },
-                    { key: "all", label: "ALL" },
-                  ] as const
-                ).map((preset) => (
-                  <Button
-                    key={preset.key}
-                    type="button"
-                    size="sm"
-                    variant={
-                      historyRange === preset.key ? "default" : "outline"
-                    }
-                    onClick={() => setHistoryRange(preset.key)}
-                  >
-                    {preset.label}
-                  </Button>
-                ))}
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="stats-history-modal-habit">Habit filter</Label>
-                <select
-                  id="stats-history-modal-habit"
-                  value={historyHabitId}
-                  onChange={(event) => setHistoryHabitId(event.target.value)}
-                  className="h-9 min-w-52 border-2 border-black bg-background px-2 text-xs uppercase tracking-[0.08em]"
-                >
-                  <option value="all">All active habits</option>
-                  {activeHabits.map((habit) => (
-                    <option key={habit._id} value={habit._id}>
-                      {habit.name}
-                    </option>
-                  ))}
-                </select>
+      {isMobile ? (
+        <Drawer open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+          <DrawerContent className="max-h-[85vh]">
+            <div className="mx-auto w-full max-w-sm">
+              <DrawerHeader>
+                <DrawerTitle className="text-2xl font-black uppercase tracking-[-0.05em]">
+                  History Calendar
+                </DrawerTitle>
+                <DrawerDescription className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                  MTWTFSS snapshot for{" "}
+                  {formatStatsRangeLabel(historyRange).toLowerCase()}.
+                </DrawerDescription>
+              </DrawerHeader>
+              <div className="px-4 pb-8">
+                <HistoryContent
+                  historyRange={historyRange}
+                  setHistoryRange={setHistoryRange}
+                  historyHabitId={historyHabitId}
+                  setHistoryHabitId={setHistoryHabitId}
+                  activeHabits={activeHabits}
+                  historyWeeks={historyWeeks}
+                  scrollAreaClassName="max-h-[50vh]"
+                />
               </div>
             </div>
-
-            <div className="flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-[0.18em]">
-              <span className="border-2 border-black bg-background px-2 py-1">
-                Black: done
-              </span>
-              <span className="border-2 border-black bg-background px-2 py-1 text-[#DF3B23]">
-                Red: miss
-              </span>
-              <span className="border-2 border-black bg-background px-2 py-1">
-                Outline: live
-              </span>
-              <span className="border-2 border-black bg-background px-2 py-1 text-muted-foreground">
-                Beige: rest/skip
-              </span>
-              <span className="border-2 border-dashed border-black/40 bg-background px-2 py-1 text-muted-foreground">
-                Blank: not started
-              </span>
-            </div>
-
-            <div className="max-h-[58vh] space-y-2 overflow-y-auto pr-1">
-              {historyWeeks.map((week, rowIndex) => (
-                <div
-                  key={`${week.weekStartLabel}-${rowIndex}`}
-                  className="grid grid-cols-[auto_1fr] items-stretch gap-2"
-                >
-                  <div className="flex w-14 items-center justify-center border-2 border-black bg-secondary px-1 text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground">
-                    {week.weekStartLabel}
-                  </div>
-                  <div className="grid grid-cols-7 gap-1.5">
-                    {week.days.map((entry) => {
-                      const style =
-                        entry.status === "missed"
-                          ? "bg-[#DF3B23] text-white border-black"
-                          : entry.status === "perfect"
-                            ? "bg-black text-white border-black"
-                            : entry.status === "pending"
-                              ? "bg-background text-foreground border-[3px] border-black"
-                              : entry.status === "future"
-                                ? "bg-background text-transparent border-dashed border-black/30"
-                                : entry.status === "inactive"
-                                  ? "bg-background text-transparent border-dashed border-black/20 opacity-40"
-                                  : entry.status === "skipped"
-                                    ? "bg-[#F7EFE1] text-[#7B5D3A] border-[#B7925A]"
-                                    : "bg-secondary text-muted-foreground/80 border-black/20";
-
-                      return (
-                        <div
-                          key={entry.dateKey}
-                          title={`${entry.dayLabel} ${entry.dateKey}`}
-                          className={`grid min-h-12 border-2 p-1.5 text-center font-bold uppercase ${style}`}
-                        >
-                          <span className="text-[9px]">
-                            {entry.dayLabel.charAt(0)}
-                          </span>
-                          <span className="mt-auto text-[10px]">
-                            {entry.dateKey.slice(8)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </DrawerContent>
+        </Drawer>
+      ) : (
+        <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+          <DialogContent className="sm:max-w-4xl">
+            <DialogHeader>
+              <DialogTitle className="text-3xl font-black uppercase tracking-[-0.05em]">
+                History Calendar
+              </DialogTitle>
+              <DialogDescription className="text-sm font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                MTWTFSS snapshot for{" "}
+                {formatStatsRangeLabel(historyRange).toLowerCase()}.
+              </DialogDescription>
+            </DialogHeader>
+            <HistoryContent
+              historyRange={historyRange}
+              setHistoryRange={setHistoryRange}
+              historyHabitId={historyHabitId}
+              setHistoryHabitId={setHistoryHabitId}
+              activeHabits={activeHabits}
+              historyWeeks={historyWeeks}
+              scrollAreaClassName="max-h-[58vh]"
+            />
+          </DialogContent>
+        </Dialog>
+      )}
 
       <div className="grid gap-6 border-b-2 border-black pb-8 pt-4 xl:grid-cols-[0.95fr_1.05fr]">
         <div className="space-y-4">
@@ -4036,16 +4190,16 @@ function StatsTab({
         </div>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-7 gap-2">
+          <div className="grid grid-cols-7 gap-1 sm:gap-2">
             {boxes.map(({ day, status }) => {
               const isToday = day.dateKey === todayStr;
               const style =
                 status === "missed"
-                  ? "bg-[#DF3B23] text-white border-black shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)]"
+                  ? "bg-[#DF3B23] text-white border-black shadow-[2px_2px_0px_0px_rgba(26,24,20,0.18)] sm:shadow-[4px_4px_0px_0px_rgba(26,24,20,0.18)]"
                   : status === "perfect"
                     ? "bg-black text-white border-black"
                     : status === "pending"
-                      ? "bg-background text-foreground border-black border-[3px]"
+                      ? "bg-background text-foreground border-black border-[2px] sm:border-[3px]"
                       : status === "future"
                         ? "bg-background text-transparent border-dashed border-black/30"
                         : status === "inactive"
@@ -4053,21 +4207,23 @@ function StatsTab({
                           : "bg-secondary text-muted-foreground/70 border-black/20";
 
               const todayMarker = isToday
-                ? "ring-[3px] ring-foreground ring-offset-2 ring-offset-background"
+                ? "ring-[2px] ring-foreground ring-offset-1 ring-offset-background sm:ring-[3px] sm:ring-offset-2"
                 : "";
 
               return (
                 <div
                   key={day.dateKey}
-                  className={`grid min-h-20 border-2 p-2 font-bold uppercase ${style} ${todayMarker}`}
+                  className={`flex aspect-square flex-col items-center justify-center border-2 p-1 font-bold uppercase transition-transform hover:scale-105 sm:aspect-auto sm:min-h-20 sm:p-2 ${style} ${todayMarker}`}
                 >
-                  <div className="flex items-start justify-between">
-                    <span className="text-[10px]">{day.label}</span>
-                    <span className="text-[9px] opacity-70">
+                  <div className="flex w-full items-start justify-between sm:mb-auto">
+                    <span className="text-[8px] sm:text-[10px]">
+                      {day.label.charAt(0)}
+                    </span>
+                    <span className="hidden text-[9px] opacity-70 sm:inline">
                       {day.dateKey.slice(8)}
                     </span>
                   </div>
-                  <div className="mt-auto text-xs font-black tracking-[0.16em]">
+                  <div className="mt-0.5 text-[8px] font-black tracking-tighter sm:mt-auto sm:text-xs sm:tracking-[0.16em]">
                     {status === "missed"
                       ? "MISS"
                       : status === "perfect"
@@ -4082,75 +4238,86 @@ function StatsTab({
               );
             })}
           </div>
-          <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-            <span className="border-2 border-black bg-background px-3 py-2">
-              Week status:{" "}
+          <div className="flex flex-wrap gap-2 text-[9px] font-bold uppercase tracking-[0.12em] text-muted-foreground sm:text-[11px] sm:tracking-[0.18em]">
+            <span className="border-2 border-black bg-background px-2.5 py-1.5 sm:px-3 sm:py-2">
+              Status:{" "}
               {weekMisses === 0
                 ? "Clean"
                 : `${weekMisses} miss${weekMisses > 1 ? "es" : ""}`}
             </span>
-            <span className="border-2 border-black bg-background px-3 py-2">
-              Pending today: {pendingTodayCount}
+            <span className="border-2 border-black bg-background px-2.5 py-1.5 sm:px-3 sm:py-2">
+              Pending: {pendingTodayCount}
             </span>
-            <span className="border-2 border-black bg-background px-3 py-2">
-              Missed today: {missedTodayCount}
+            <span className="border-2 border-black bg-background px-2.5 py-1.5 sm:px-3 sm:py-2">
+              Missed: {missedTodayCount}
             </span>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <div
-          className={`border-2 border-black bg-background p-5 ${missedCount === 0 ? "sm:col-span-2 xl:col-span-2" : ""}`}
+          className={`border-2 p-3 sm:p-5 ${missedCount > 0 ? "bg-background border-[#DF3B23] border-2 sm:border-[3px]" : "border-black bg-background"}`}
         >
-          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+          <p
+            className={`line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+          >
+            Missed
+          </p>
+          <div className="flex flex-col">
+            <p
+              className={`mt-1 sm:mt-2 font-black ${missedCount > 0 ? "text-3xl sm:text-5xl text-[#DF3B23]" : "text-2xl sm:text-4xl text-foreground"}`}
+            >
+              {missedCount}
+            </p>
+            <p
+              className={`mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+            >
+              {missedCount > 0 ? missedJudgement : "Clean"}
+            </p>
+          </div>
+        </div>
+
+        <div className="border-2 border-black bg-background p-3 sm:p-5">
+          <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
             Best Streak
           </p>
-          <p
-            className={`mt-2 font-black ${missedCount === 0 ? "text-5xl" : "text-4xl"}`}
-          >
-            {bestStreak}
-          </p>
+          <div className="flex flex-col">
+            <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+              {bestStreak}
+            </p>
+            <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Highest
+            </p>
+          </div>
         </div>
 
-        <div
-          className={`border-2 p-5 ${missedCount > 0 ? "bg-background border-[#DF3B23] border-[3px] sm:col-span-2 xl:col-span-2" : "border-black bg-background"}`}
-        >
-          <p
-            className={`text-xs font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
-          >
-            System Misses
-          </p>
-          <p
-            className={`mt-2 font-black ${missedCount > 0 ? "text-5xl text-[#DF3B23]" : "text-4xl text-foreground"}`}
-          >
-            {missedCount}
-          </p>
-          <p
-            className={`mt-3 text-[10px] font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
-          >
-            {missedJudgement}
-          </p>
-        </div>
-
-        <div className="border-2 border-black bg-background p-5">
-          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+        <div className="border-2 border-black bg-background p-3 sm:p-5">
+          <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
             Completed
           </p>
-          <p className="mt-2 text-4xl font-black">{completedCount}</p>
-          <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-            {completedJudgement}
-          </p>
+          <div className="flex flex-col">
+            <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+              {completedCount}
+            </p>
+            <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              {completedJudgement}
+            </p>
+          </div>
         </div>
 
-        <div className="border-2 border-black bg-background p-5 sm:col-span-2 xl:col-span-1">
-          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+        <div className="border-2 border-black bg-background p-3 sm:p-5">
+          <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
             Bonus
           </p>
-          <p className="mt-2 text-4xl font-black">{bonusCount}</p>
-          <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-            {bonusJudgement}
-          </p>
+          <div className="flex flex-col">
+            <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+              {bonusCount}
+            </p>
+            <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              {bonusJudgement}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -5008,75 +5175,97 @@ function ProfileTab({
           <CardHeader>
             <CardTitle className="text-2xl">Stats Readout</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-2">
             <div
-              className={`border-2 border-black bg-background p-5 ${missedCount === 0 ? "sm:col-span-2" : ""}`}
+              className={`border-2 p-3 sm:p-5 ${missedCount > 0 ? "bg-background border-[#DF3B23] border-2 sm:border-[3px]" : "border-black bg-background"}`}
             >
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+              <p
+                className={`line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+              >
+                Missed
+              </p>
+              <div className="flex flex-col">
+                <p
+                  className={`mt-1 sm:mt-2 font-black ${missedCount > 0 ? "text-3xl sm:text-5xl text-[#DF3B23]" : "text-2xl sm:text-4xl text-foreground"}`}
+                >
+                  {missedCount}
+                </p>
+                <p
+                  className={`mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
+                >
+                  {missedCount > 0 ? missedJudgement : "Clean"}
+                </p>
+              </div>
+            </div>
+
+            <div className="border-2 border-black bg-background p-3 sm:p-5">
+              <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
                 Best Streak
               </p>
-              <p
-                className={`mt-2 font-black ${missedCount === 0 ? "text-5xl" : "text-4xl"}`}
-              >
-                {bestStreak}
-              </p>
+              <div className="flex flex-col">
+                <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+                  {bestStreak}
+                </p>
+                <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Highest
+                </p>
+              </div>
             </div>
 
-            <div
-              className={`border-2 p-5 ${missedCount > 0 ? "bg-background border-[#DF3B23] border-[3px] sm:col-span-2" : "border-black bg-background"}`}
-            >
-              <p
-                className={`text-xs font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
-              >
-                System Misses
+            <div className="border-2 border-black bg-background p-3 sm:p-5">
+              <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Completed
               </p>
-              <p
-                className={`mt-2 font-black ${missedCount > 0 ? "text-5xl text-[#DF3B23]" : "text-4xl text-foreground"}`}
-              >
-                {missedCount}
-              </p>
-              <p
-                className={`mt-3 text-[10px] font-bold uppercase tracking-widest ${missedCount > 0 ? "text-[#DF3B23]" : "text-muted-foreground"}`}
-              >
-                {missedJudgement}
-              </p>
+              <div className="flex flex-col">
+                <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+                  {completedCount}
+                </p>
+                <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  {completedJudgement}
+                </p>
+              </div>
             </div>
 
-            <div className="border-2 border-black bg-background p-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                Week Completed
+            <div className="border-2 border-black bg-background p-3 sm:p-5">
+              <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Bonus
               </p>
-              <p className="mt-2 text-4xl font-black">{completedCount}</p>
-              <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                {completedJudgement}
-              </p>
+              <div className="flex flex-col">
+                <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+                  {bonusCount}
+                </p>
+                <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  {bonusJudgement}
+                </p>
+              </div>
             </div>
 
-            <div className="border-2 border-black bg-background p-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                Bonus Sessions
+            <div className="border-2 border-black bg-background p-3 sm:p-5">
+              <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Active
               </p>
-              <p className="mt-2 text-4xl font-black">{bonusCount}</p>
-              <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                {bonusJudgement}
-              </p>
+              <div className="flex flex-col">
+                <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+                  {activeHabits.length}
+                </p>
+                <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Habits
+                </p>
+              </div>
             </div>
 
-            <div className="border-2 border-black bg-background p-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                Active Habits
+            <div className="border-2 border-black bg-background p-3 sm:p-5">
+              <p className="line-clamp-1 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Lifetime
               </p>
-              <p className="mt-2 text-4xl font-black">{activeHabits.length}</p>
-              <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                Current targets
-              </p>
-            </div>
-
-            <div className="border-2 border-black bg-background p-5 sm:col-span-2">
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                Total Lifetime Logs
-              </p>
-              <p className="mt-2 text-4xl font-black">{checkIns.length}</p>
+              <div className="flex flex-col">
+                <p className="mt-1 sm:mt-2 text-2xl sm:text-4xl font-black">
+                  {checkIns.length}
+                </p>
+                <p className="mt-1 line-clamp-1 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Logs
+                </p>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -5880,8 +6069,8 @@ export function DashboardShell() {
 
   return (
     <main className="min-h-screen bg-background px-4 py-6 text-foreground sm:px-6 sm:py-8">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
-        <section className="border-2 border-black bg-card p-4 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-6 lg:p-8">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:gap-8">
+        <section className="border-2 border-black bg-card p-3 shadow-[8px_8px_0px_0px_rgba(26,24,20,1)] sm:p-6 lg:p-8">
           <SummaryStatusCard
             snapshots={habitSnapshots}
             tasks={resolvedAgentTasks}
@@ -5987,7 +6176,7 @@ export function DashboardShell() {
       />
 
       <nav
-        className="fixed inset-x-0 bottom-0 bg-transparent px-4 pt-4"
+        className="fixed inset-x-0 bottom-0 z-[100] bg-transparent px-4 pt-4"
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
       >
         <AnimatedDock
