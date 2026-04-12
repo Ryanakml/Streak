@@ -1751,6 +1751,7 @@ async function applyOperationalSafetyResolution(args: {
         "If chatExtraction says excuse or missed, do not convert it into skip_habit_for_date unless the user is clearly issuing an explicit planner command rather than reporting reluctance or failure. " +
         "If there is a pendingAction and the user is simply answering the missing fields for that pending action, keep correctedIntent aligned with the pending action and set continuePendingAction=true. " +
         "If the user is clearly starting a different request than the pendingAction, set supersedePendingAction=true. " +
+        "CRITICAL: If the user message is about completing a habit (e.g. 'done with github', 'beres gym') and habitName matches one of the activeHabits, you MUST set correctedIntent to 'none'. Do NOT use mark_task_done for habits. " +
         "simple_reschedule_suggestion is only for advisory requests about what should be moved. " +
         "If the user specifies the item that should be moved, or gives a concrete target date/time for that move, use reschedule_habit_time instead. " +
         "Examples: 'gue males gym hari ini' -> none. " +
@@ -2443,6 +2444,7 @@ async function extractOperationalOutcome(input: {
         "taskTitle must be a short clean task title or null. " +
         "reminderOffsetMinutes must be a number of minutes before the task time, or null if not provided. " +
         "skip_habit_for_date means an intentional planned skip. " +
+        "CRITICAL: If the user says they are DONE, FINISHED, or have COMPLETED a habit (e.g., 'iam done with github today', 'udah beres gym'), you MUST set intent to 'none'. Habit completions are handled by a different specialized extractor. Only use mark_task_done for one-off tasks that are NOT in the activeHabits list. " +
         "Do not classify failure or missed-result reports like gagal, kelewat, ga jadi, tidak sempat, or miss hari ini as skip. Leave those as intent none so conversational logging can handle them. " +
         "Messages like skip besok or gue mau skip besok are still skip_habit_for_date even if the habit is missing and needs clarification. " +
         "Messages like skip gym besok are skip_habit_for_date, not missed. " +
