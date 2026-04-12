@@ -45,24 +45,24 @@ export const AnimatedDock = ({ className, items }: AnimatedDockProps) => {
               rel={item.rel}
               onClick={item.onClick}
               aria-label={item.label}
-              className="flex h-full w-full grow items-center justify-center"
+              className="flex h-full w-full grow items-center justify-center p-2"
             >
-              <span className="flex items-center gap-2">
-                {item.Icon}
-                <span>{item.label}</span>
-              </span>
+              <div className="flex items-center gap-2">
+                <div className="shrink-0">{item.Icon}</div>
+                <span className="hidden sm:inline">{item.label}</span>
+              </div>
             </Link>
           ) : (
             <button
               type="button"
               onClick={item.onClick}
               aria-label={item.label}
-              className="flex h-full w-full grow items-center justify-center"
+              className="flex h-full w-full grow items-center justify-center p-2"
             >
-              <span className="flex items-center gap-2">
-                {item.Icon}
-                <span>{item.label}</span>
-              </span>
+              <div className="flex items-center gap-2">
+                <div className="shrink-0">{item.Icon}</div>
+                <span className="hidden sm:inline">{item.label}</span>
+              </div>
             </button>
           )}
         </DockItem>
@@ -87,15 +87,11 @@ export const DockItem = ({
   return (
     <div
       className={cn(
-        "relative flex min-h-16 flex-1 items-center justify-center border-r-2 border-black last:border-r-0",
-        active
-          ? "bg-[#DF3B23] text-white"
-          : "bg-card text-foreground",
+        "relative flex min-h-12 flex-1 items-center justify-center border-r-2 border-black last:border-r-0 sm:min-h-16",
+        active ? "bg-[#DF3B23] text-white" : "bg-card text-foreground",
       )}
     >
-      <div
-        className="flex h-full w-full grow items-center justify-center text-[10px] font-black uppercase tracking-[0.24em]"
-      >
+      <div className="flex h-full w-full grow items-center justify-center text-[10px] font-black uppercase tracking-[0.24em]">
         {children}
       </div>
       {badge ? (
