@@ -780,6 +780,7 @@ function HabitComposerDialog({
   const [saving, setSaving] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
   const setOpen = controlledOnOpenChange ?? setUncontrolledOpen;
+  const isMobile = useIsMobile();
 
   async function handleSubmit() {
     setSaving(true);
@@ -790,6 +791,183 @@ function HabitComposerDialog({
     } finally {
       setSaving(false);
     }
+  }
+
+  const header = (
+    <DialogHeader>
+      <DialogTitle className="text-3xl">Create Habit</DialogTitle>
+      <DialogDescription className="text-sm font-bold uppercase tracking-[0.12em] text-muted-foreground">
+        Add another live habit. Limits are still enforced by your Convex user
+        state.
+      </DialogDescription>
+    </DialogHeader>
+  );
+
+  const content = (
+    <div className="grid gap-5 py-4">
+      <div className="grid gap-2">
+        <Label htmlFor="habit-name">Habit name</Label>
+        <Input
+          id="habit-name"
+          value={form.name}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, name: event.target.value }))
+          }
+          placeholder="Go to gym 4x/week"
+        />
+      </div>
+
+      <div className="grid gap-3">
+        <Label>Target days</Label>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {DAYS.map((day) => {
+            const checked = form.targetDays.includes(day.key);
+            return (
+              <label
+                key={day.key}
+                className="flex items-center gap-3 border-2 border-black bg-background px-3 py-3 text-sm uppercase"
+              >
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={(value) =>
+                    setForm((current) => ({
+                      ...current,
+                      targetDays: value
+                        ? [...current.targetDays, day.key]
+                        : current.targetDays.filter(
+                            (entry) => entry !== day.key,
+                          ),
+                    }))
+                  }
+                />
+                <span>{day.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-2">
+          <Label htmlFor="scheduled-time">Scheduled</Label>
+          <Input
+            id="scheduled-time"
+            type="time"
+            value={form.scheduledTime}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                scheduledTime: event.target.value,
+              }))
+            }
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="reminder-time">Reminder</Label>
+          <Input
+            id="reminder-time"
+            type="time"
+            value={form.reminderTime}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                reminderTime: event.target.value,
+              }))
+            }
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="deadline-time">Deadline</Label>
+          <Input
+            id="deadline-time"
+            type="time"
+            value={form.checkInDeadline}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                checkInDeadline: event.target.value,
+              }))
+            }
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="habit-rules">What counts?</Label>
+        <Input
+          id="habit-rules"
+          value={form.rules}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              rules: event.target.value,
+            }))
+          }
+        />
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="habit-motivation">Why does this matter?</Label>
+        <Textarea
+          id="habit-motivation"
+          value={form.motivation}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              motivation: event.target.value,
+            }))
+          }
+          className="min-h-24"
+          placeholder="I am tired of quitting on myself."
+        />
+      </div>
+
+      <Button
+        type="button"
+        disabled={
+          saving ||
+          !form.name.trim() ||
+          !form.rules.trim() ||
+          !form.motivation.trim() ||
+          form.targetDays.length === 0
+        }
+        onClick={handleSubmit}
+      >
+        {saving ? "Saving..." : "Lock It In"}
+      </Button>
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <Drawer open={open} onOpenChange={setOpen} shouldScaleBackground={false}>
+        {trigger ? (
+          <div onClick={() => !disabled && setOpen(true)}>{trigger}</div>
+        ) : (
+          <Button
+            type="button"
+            variant="default"
+            className="bg-black text-white"
+            onClick={() => setOpen(true)}
+            disabled={disabled}
+          >
+            <Plus />
+            New Habit
+          </Button>
+        )}
+        <DrawerContent className="max-h-[92vh] border-2 border-black bg-card">
+          <div className="overflow-y-auto px-6 pb-8 pt-4">
+            <DrawerHeader className="px-0 text-left">
+              <DrawerTitle className="text-3xl">Create Habit</DrawerTitle>
+              <DrawerDescription className="text-sm font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                Add another live habit. Limits are still enforced.
+              </DrawerDescription>
+            </DrawerHeader>
+            {content}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    );
   }
 
   return (
@@ -809,146 +987,8 @@ function HabitComposerDialog({
         </Button>
       )}
       <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-3xl">Create Habit</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            Add another live habit. Limits are still enforced by your Convex
-            user state.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid gap-5">
-          <div className="grid gap-2">
-            <Label htmlFor="habit-name">Habit name</Label>
-            <Input
-              id="habit-name"
-              value={form.name}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, name: event.target.value }))
-              }
-              placeholder="Go to gym 4x/week"
-            />
-          </div>
-
-          <div className="grid gap-3">
-            <Label>Target days</Label>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {DAYS.map((day) => {
-                const checked = form.targetDays.includes(day.key);
-                return (
-                  <label
-                    key={day.key}
-                    className="flex items-center gap-3 border-2 border-black bg-background px-3 py-3 text-sm uppercase"
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          targetDays: value
-                            ? [...current.targetDays, day.key]
-                            : current.targetDays.filter(
-                                (entry) => entry !== day.key,
-                              ),
-                        }))
-                      }
-                    />
-                    <span>{day.label}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="grid gap-2">
-              <Label htmlFor="scheduled-time">Scheduled</Label>
-              <Input
-                id="scheduled-time"
-                type="time"
-                value={form.scheduledTime}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    scheduledTime: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="reminder-time">Reminder</Label>
-              <Input
-                id="reminder-time"
-                type="time"
-                value={form.reminderTime}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    reminderTime: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="deadline-time">Deadline</Label>
-              <Input
-                id="deadline-time"
-                type="time"
-                value={form.checkInDeadline}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    checkInDeadline: event.target.value,
-                  }))
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="habit-rules">What counts?</Label>
-            <Input
-              id="habit-rules"
-              value={form.rules}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  rules: event.target.value,
-                }))
-              }
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="habit-motivation">Why does this matter?</Label>
-            <Textarea
-              id="habit-motivation"
-              value={form.motivation}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  motivation: event.target.value,
-                }))
-              }
-              className="min-h-28"
-              placeholder="I am tired of quitting on myself."
-            />
-          </div>
-
-          <Button
-            type="button"
-            disabled={
-              saving ||
-              !form.name.trim() ||
-              !form.rules.trim() ||
-              !form.motivation.trim() ||
-              form.targetDays.length === 0
-            }
-            onClick={handleSubmit}
-          >
-            {saving ? "Saving..." : "Lock It In"}
-          </Button>
-        </div>
+        {header}
+        {content}
       </DialogContent>
     </Dialog>
   );
@@ -972,6 +1012,7 @@ function TaskComposerDialog({
   const [saving, setSaving] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
   const setOpen = controlledOnOpenChange ?? setUncontrolledOpen;
+  const isMobile = useIsMobile();
 
   async function handleSubmit() {
     setSaving(true);
@@ -984,90 +1025,117 @@ function TaskComposerDialog({
     }
   }
 
+  const header = (
+    <DialogHeader>
+      <DialogTitle className="text-3xl">Create Task</DialogTitle>
+      <DialogDescription className="text-sm font-bold uppercase tracking-[0.12em] text-muted-foreground">
+        Keep it simple. One task, one time, one reminder.
+      </DialogDescription>
+    </DialogHeader>
+  );
+
+  const content = (
+    <div className="grid gap-5 py-4">
+      <div className="grid gap-2">
+        <Label htmlFor="task-name">Task name</Label>
+        <Input
+          id="task-name"
+          value={form.title}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              title: event.target.value,
+            }))
+          }
+          placeholder="Call mom"
+        />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="task-date">Date</Label>
+          <Input
+            id="task-date"
+            type="date"
+            value={form.date}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                date: event.target.value,
+              }))
+            }
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="task-time">Time</Label>
+          <Input
+            id="task-time"
+            type="time"
+            value={form.time}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                time: event.target.value,
+              }))
+            }
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="task-reminder">Reminder (minutes before)</Label>
+        <Input
+          id="task-reminder"
+          type="number"
+          min="0"
+          value={form.reminderOffsetMinutes}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              reminderOffsetMinutes: event.target.value,
+            }))
+          }
+        />
+      </div>
+
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          className="w-full sm:w-auto"
+          disabled={saving || !form.title.trim()}
+          onClick={() => void handleSubmit()}
+        >
+          {saving ? "Saving..." : "Create Task"}
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <Drawer open={open} onOpenChange={setOpen} shouldScaleBackground={false}>
+        <div onClick={() => !disabled && setOpen(true)}>{trigger}</div>
+        <DrawerContent className="max-h-[85vh] border-2 border-black bg-card">
+          <div className="overflow-y-auto px-6 pb-8 pt-4">
+            <DrawerHeader className="px-0 text-left">
+              <DrawerTitle className="text-3xl">Create Task</DrawerTitle>
+              <DrawerDescription className="text-sm font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                One task, one time, one reminder.
+              </DrawerDescription>
+            </DrawerHeader>
+            {content}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <div onClick={() => !disabled && setOpen(true)}>{trigger}</div>
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="text-3xl">Create Task</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            Keep it simple. One task, one time, one reminder.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid gap-5">
-          <div className="grid gap-2">
-            <Label htmlFor="task-name">Task name</Label>
-            <Input
-              id="task-name"
-              value={form.title}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  title: event.target.value,
-                }))
-              }
-              placeholder="Call mom"
-            />
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="task-date">Date</Label>
-              <Input
-                id="task-date"
-                type="date"
-                value={form.date}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    date: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="task-time">Time</Label>
-              <Input
-                id="task-time"
-                type="time"
-                value={form.time}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    time: event.target.value,
-                  }))
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="task-reminder">Reminder (minutes before)</Label>
-            <Input
-              id="task-reminder"
-              type="number"
-              min="0"
-              value={form.reminderOffsetMinutes}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  reminderOffsetMinutes: event.target.value,
-                }))
-              }
-            />
-          </div>
-
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              disabled={saving}
-              onClick={() => void handleSubmit()}
-            >
-              {saving ? "Saving..." : "Create Task"}
-            </Button>
-          </div>
-        </div>
+        {header}
+        {content}
       </DialogContent>
     </Dialog>
   );
@@ -4122,7 +4190,11 @@ function StatsTab({
       </div>
 
       {isMobile ? (
-        <Drawer open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+        <Drawer
+          open={isHistoryOpen}
+          onOpenChange={setIsHistoryOpen}
+          shouldScaleBackground={false}
+        >
           <DrawerContent className="max-h-[85vh]">
             <div className="mx-auto w-full max-w-sm">
               <DrawerHeader>
@@ -4910,7 +4982,11 @@ function HabitDetailPanel({
 
   if (isMobile) {
     return (
-      <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <Drawer
+        open={open}
+        onOpenChange={(nextOpen) => !nextOpen && onClose()}
+        shouldScaleBackground={false}
+      >
         <DrawerContent className="max-h-[88vh] border-2 border-black bg-card">
           <DrawerHeader className="px-4 pb-0 pt-2 text-left">
             <DrawerTitle className="sr-only">Habit Detail</DrawerTitle>

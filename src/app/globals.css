@@ -78,7 +78,14 @@
   --shadow-brutal: 4px 4px 0 0 rgba(244, 241, 234, 1);
   --shadow-brutal-lg: 8px 8px 0 0 rgba(244, 241, 234, 1);
 }
-
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+  }
+  body.vaul-open-screen-offset {
+    overflow: hidden !important;
+  }
+}
 @theme inline {
   --color-card: var(--card);
   --color-ring: var(--ring);
