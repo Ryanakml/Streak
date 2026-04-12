@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import { polar, POLAR_ORGANIZATION_ID } from "@/lib/polar";
+import { loadDefaultPolarProduct } from "@/lib/polar-products";
 
 function getSafeOrigin() {
   const fallbackOrigin = "http://localhost:3000";
@@ -48,23 +49,14 @@ export async function POST(req: NextRequest) {
   }
 
   productId = productId?.trim() || null;
-  if (!productId) {
-    return NextResponse.json(
-      { error: "Product ID is required" },
-      { status: 400 },
-    );
-  }
-
-  const product = await polar.products.get({ id: productId });
-  if (product.organizationId !== POLAR_ORGANIZATION_ID || product.isArchived) {
-    return NextResponse.json(
-      { ok: false, reason: "Product is not available for this organization" },
-      { status: 400 },
-    );
-  }
+  const wantsJson =
+    contentType.includes("application/json") ||
+    (req.headers.get("accept") || "").includes("application/json");
 
   const client = await clerkClient();
   const user = await client.users.getUser(userId);
+  const currentTier =
+    user.publicMetadata.subscriptionTier === "pro" ? "pro" : "free";
   const safeOrigin = getSafeOrigin();
   const successUrl = new URL(
     "/dashboard?billing=success",
@@ -72,8 +64,46 @@ export async function POST(req: NextRequest) {
   ).toString();
   const returnUrl = new URL("/plans", safeOrigin).toString();
 
+  if (currentTier === "pro") {
+    if (wantsJson) {
+      return NextResponse.json(
+        { ok: false, reason: "Account is already on Pro" },
+        { status: 409 },
+      );
+    }
+
+    return NextResponse.redirect(new URL("/dashboard", safeOrigin), 303);
+  }
+
+  if (!productId) {
+    productId = (await loadDefaultPolarProduct())?.id ?? null;
+  }
+
+  if (!productId) {
+    if (wantsJson) {
+      return NextResponse.json(
+        { ok: false, reason: "No active Polar product available" },
+        { status: 404 },
+      );
+    }
+
+    return NextResponse.redirect(new URL("/plans", safeOrigin), 303);
+  }
+
+  const product = await polar.products.get({ id: productId });
+  if (product.organizationId !== POLAR_ORGANIZATION_ID || product.isArchived) {
+    if (wantsJson) {
+      return NextResponse.json(
+        { ok: false, reason: "Product is not available for this organization" },
+        { status: 400 },
+      );
+    }
+
+    return NextResponse.redirect(new URL("/plans", safeOrigin), 303);
+  }
+
   const checkout = await polar.checkouts.create({
-    products: [productId],
+    products: [product.id],
     successUrl,
     returnUrl,
     customerEmail: user.primaryEmailAddress?.emailAddress ?? undefined,
@@ -88,6 +118,10 @@ export async function POST(req: NextRequest) {
       subscriptionTier: "pro",
     },
   });
+
+  if (wantsJson) {
+    return NextResponse.json({ ok: true, url: checkout.url });
+  }
 
   return NextResponse.redirect(checkout.url, 303);
 }
