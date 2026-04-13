@@ -601,6 +601,31 @@ function parseDeterministicTime(content: string) {
   return null;
 }
 
+function parseAmbiguousHourWithoutPeriod(content: string) {
+  const lowered = content.toLowerCase().replace(/\s+/g, " ").trim();
+  const match = lowered.match(
+    /\bjam\s+(\d{1,2})(?:[:.](\d{1,2}))?(?!\s*(pagi|siang|sore|malam))\b/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = match[2] ? Number(match[2]) : 0;
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return null;
+  }
+
+  if (hour < 1 || hour > 11 || minute < 0 || minute > 59) {
+    return null;
+  }
+
+  return {
+    hour,
+    minute,
+  };
+}
+
 function inferDeterministicDate(content: string, context: ChatContext) {
   const lowered = normalizeLooseText(content);
   const currentHour = Number.parseInt(context.nowLocalTime.slice(0, 2), 10);
@@ -648,6 +673,69 @@ function hasDeterministicTimeCue(content: string) {
     /\b\d{1,2}(:|\.)\d{2}\b/.test(content) ||
     /\b\d{1,2}\s*(am|pm)\b/i.test(content)
   );
+}
+
+function hasFutureSchedulingCue(content: string) {
+  const lowered = normalizeLooseText(content);
+  return (
+    lowered.includes("nanti") ||
+    lowered.includes("ntar") ||
+    lowered.includes("later") ||
+    lowered.includes("besok") ||
+    lowered.includes("tomorrow")
+  );
+}
+
+function resolveNextOccurrenceTime(args: {
+  content: string;
+  context: ChatContext;
+  parsedTargetTime: string | null;
+  parsedTargetDate: string | null;
+}) {
+  if (!args.parsedTargetTime) {
+    return {
+      targetTime: args.parsedTargetTime,
+      targetDate: args.parsedTargetDate,
+    };
+  }
+
+  const ambiguousHour = parseAmbiguousHourWithoutPeriod(args.content);
+  if (!ambiguousHour || !hasFutureSchedulingCue(args.content)) {
+    return {
+      targetTime: args.parsedTargetTime,
+      targetDate: args.parsedTargetDate,
+    };
+  }
+
+  const explicitFutureDate =
+    args.parsedTargetDate != null && args.parsedTargetDate !== args.context.date;
+  if (explicitFutureDate) {
+    return {
+      targetTime: args.parsedTargetTime,
+      targetDate: args.parsedTargetDate,
+    };
+  }
+
+  const parsedMinutes = timeToMinutes(args.parsedTargetTime);
+  if (parsedMinutes > args.context.minutesIntoDay) {
+    return {
+      targetTime: args.parsedTargetTime,
+      targetDate: args.parsedTargetDate,
+    };
+  }
+
+  const plusTwelveMinutes = parsedMinutes + 12 * 60;
+  if (plusTwelveMinutes < 1440 && plusTwelveMinutes > args.context.minutesIntoDay) {
+    return {
+      targetTime: minutesToTime(plusTwelveMinutes),
+      targetDate: args.parsedTargetDate ?? args.context.date,
+    };
+  }
+
+  return {
+    targetTime: args.parsedTargetTime,
+    targetDate: args.parsedTargetDate ?? shiftDateKey(args.context.date, 1),
+  };
 }
 
 function tokenizeTaskText(text: string) {
@@ -2642,16 +2730,22 @@ function applyDeterministicScheduleOverride(args: {
 
   const parsedTargetTime = parseDeterministicTime(args.content);
   const parsedTargetDate = inferDeterministicDate(args.content, args.context);
+  const nextOccurrence = resolveNextOccurrenceTime({
+    content: args.content,
+    context: args.context,
+    parsedTargetTime,
+    parsedTargetDate,
+  });
   return {
     ...args.extraction,
     targetTime:
-      parsedTargetTime &&
+      nextOccurrence.targetTime &&
       (hasDeterministicTimeCue(args.content) || !isTimeKey(args.extraction.targetTime))
-        ? parsedTargetTime
+        ? nextOccurrence.targetTime
         : args.extraction.targetTime,
     targetDate:
-      parsedTargetDate != null
-        ? parsedTargetDate
+      nextOccurrence.targetDate != null
+        ? nextOccurrence.targetDate
         : args.extraction.targetDate,
   };
 }
