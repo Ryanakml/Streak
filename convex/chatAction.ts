@@ -453,6 +453,315 @@ function formatDuration(totalMinutes: number) {
   return `${hours}j ${minutes}m`;
 }
 
+const INDONESIAN_NUMBER_WORDS: Record<string, number> = {
+  nol: 0,
+  satu: 1,
+  dua: 2,
+  tiga: 3,
+  empat: 4,
+  lima: 5,
+  enam: 6,
+  tujuh: 7,
+  delapan: 8,
+  sembilan: 9,
+  sepuluh: 10,
+  sebelas: 11,
+  dua_belas: 12,
+};
+
+const TASK_COMPLETION_PHRASES = [
+  "already",
+  "done",
+  "beres",
+  "selesai",
+  "kelar",
+  "sudah",
+  "udah",
+  "just woke up",
+  "just wake up",
+  "woke up",
+  "waking up",
+  "baru bangun",
+  "udah bangun",
+  "sudah bangun",
+  "bangun",
+] as const;
+
+const TASK_NEGATION_PHRASES = [
+  "not doing",
+  "not yet",
+  "belum",
+  "ga jadi",
+  "gak jadi",
+  "nggak jadi",
+  "tidak jadi",
+  "bukan",
+  "dont",
+  "don't",
+  "not done",
+  "belum selesai",
+  "belum beres",
+] as const;
+
+function normalizeLooseText(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseLooseNumber(value: string) {
+  const normalized = normalizeLooseText(value).replace(/\s+/g, "_");
+  if (/^\d+$/.test(normalized)) {
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return INDONESIAN_NUMBER_WORDS[normalized] ?? null;
+}
+
+function parseClockHourWithPeriod(args: {
+  hour: number;
+  minute: number;
+  period: string | null;
+}) {
+  if (args.hour < 0 || args.hour > 24 || args.minute < 0 || args.minute > 59) {
+    return null;
+  }
+
+  let hours = args.hour % 24;
+  const period = args.period?.toLowerCase() ?? null;
+  if (period === "pagi") {
+    if (hours === 12) {
+      hours = 0;
+    }
+  } else if (period === "siang") {
+    if (hours >= 1 && hours <= 11) {
+      hours += 12;
+    }
+  } else if (period === "sore") {
+    if (hours >= 1 && hours <= 6) {
+      hours += 12;
+    }
+  } else if (period === "malam") {
+    if (hours >= 1 && hours <= 11) {
+      hours += 12;
+    }
+    if (hours === 12) {
+      hours = 0;
+    }
+  }
+
+  return `${hours.toString().padStart(2, "0")}:${args.minute
+    .toString()
+    .padStart(2, "0")}`;
+}
+
+function parseDeterministicTime(content: string) {
+  const lowered = content.toLowerCase().replace(/\s+/g, " ").trim();
+  const halfMatch = lowered.match(/\b(?:jam\s+)?setengah\s+([a-z0-9]+)\b/);
+  if (halfMatch) {
+    const rawHour = parseLooseNumber(halfMatch[1]);
+    if (rawHour != null) {
+      const adjustedHour = (rawHour + 23) % 24;
+      return `${adjustedHour.toString().padStart(2, "0")}:30`;
+    }
+  }
+
+  const jamMatch = lowered.match(
+    /\bjam\s+(\d{1,2})(?:[:.](\d{1,2}))?\s*(pagi|siang|sore|malam)?\b/,
+  );
+  if (jamMatch) {
+    const hour = Number(jamMatch[1]);
+    const minute = jamMatch[2] ? Number(jamMatch[2]) : 0;
+    return parseClockHourWithPeriod({
+      hour,
+      minute,
+      period: jamMatch[3] ?? null,
+    });
+  }
+
+  const englishMatch = lowered.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+  if (englishMatch) {
+    let hour = Number(englishMatch[1]);
+    const minute = englishMatch[2] ? Number(englishMatch[2]) : 0;
+    const period = englishMatch[3];
+    if (period === "pm" && hour < 12) {
+      hour += 12;
+    }
+    if (period === "am" && hour === 12) {
+      hour = 0;
+    }
+    return `${hour.toString().padStart(2, "0")}:${minute
+      .toString()
+      .padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
+function inferDeterministicDate(content: string, context: ChatContext) {
+  const lowered = normalizeLooseText(content);
+  const currentHour = Number.parseInt(context.nowLocalTime.slice(0, 2), 10);
+
+  if (
+    lowered.includes("hari ini") ||
+    lowered.includes("today") ||
+    lowered.includes("malam ini") ||
+    lowered.includes("pagi ini") ||
+    lowered.includes("siang ini") ||
+    lowered.includes("sore ini") ||
+    lowered.includes("tonight")
+  ) {
+    return context.date;
+  }
+
+  if (lowered.includes("besok") || lowered.includes("tomorrow")) {
+    return shiftDateKey(context.date, 1);
+  }
+
+  if (lowered.includes("nanti pagi")) {
+    return currentHour < 12 ? context.date : shiftDateKey(context.date, 1);
+  }
+
+  if (lowered.includes("nanti siang")) {
+    return currentHour < 15 ? context.date : shiftDateKey(context.date, 1);
+  }
+
+  if (lowered.includes("nanti sore")) {
+    return currentHour < 18 ? context.date : shiftDateKey(context.date, 1);
+  }
+
+  if (lowered.includes("nanti malam")) {
+    return context.date;
+  }
+
+  return null;
+}
+
+function hasDeterministicTimeCue(content: string) {
+  const lowered = content.toLowerCase();
+  return (
+    lowered.includes("setengah") ||
+    /\bjam\s+\d{1,2}/i.test(content) ||
+    /\b\d{1,2}(:|\.)\d{2}\b/.test(content) ||
+    /\b\d{1,2}\s*(am|pm)\b/i.test(content)
+  );
+}
+
+function tokenizeTaskText(text: string) {
+  return normalizeLooseText(text)
+    .split(" ")
+    .filter(
+      (token) =>
+        token.length >= 3 &&
+        ![
+          "task",
+          "baru",
+          "nanti",
+          "hari",
+          "today",
+          "besok",
+          "pagi",
+          "siang",
+          "sore",
+          "malam",
+        ].includes(token),
+    );
+}
+
+function getTaskSemanticAliases(title: string) {
+  const normalizedTitle = normalizeLooseText(title);
+  const aliases = [normalizedTitle];
+
+  if (normalizedTitle.includes("bangun") || normalizedTitle.includes("wake up")) {
+    aliases.push(
+      "waking up",
+      "wake up",
+      "woke up",
+      "just wake up",
+      "just woke up",
+      "bangun",
+      "baru bangun",
+      "udah bangun",
+      "sudah bangun",
+    );
+  }
+
+  return aliases;
+}
+
+function isTaskCompletionLikeMessage(content: string) {
+  const normalized = normalizeLooseText(content);
+  const hasCompletionSignal = TASK_COMPLETION_PHRASES.some((phrase) =>
+    normalized.includes(phrase),
+  );
+  const hasNegation = TASK_NEGATION_PHRASES.some((phrase) =>
+    normalized.includes(phrase),
+  );
+
+  return hasCompletionSignal && !hasNegation;
+}
+
+function matchTaskFromRecentContext(args: {
+  content: string;
+  tasks: Doc<"agentTasks">[];
+}) {
+  const normalizedContent = normalizeLooseText(args.content);
+  const contentTokens = tokenizeTaskText(args.content);
+  let bestMatch: Doc<"agentTasks"> | null = null;
+  let bestScore = 0;
+
+  for (const task of args.tasks) {
+    const aliases = getTaskSemanticAliases(task.title);
+    const aliasMatch = aliases.find((alias) => normalizedContent.includes(alias));
+    let score = aliasMatch ? aliasMatch.length + 10 : 0;
+
+    const taskTokens = tokenizeTaskText(task.title);
+    if (taskTokens.length > 0) {
+      const overlap = taskTokens.filter((token) => contentTokens.includes(token));
+      if (overlap.length === taskTokens.length) {
+        score += overlap.length * 5;
+      } else if (overlap.length > 0) {
+        score += overlap.length * 2;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = task;
+    }
+  }
+
+  return bestScore >= 10 ? bestMatch : null;
+}
+
+function applyDeterministicTaskChatGuard(args: {
+  content: string;
+  extraction: ChatExtractionResult;
+  context: ChatContext;
+}) {
+  const matchedTask = matchTaskFromRecentContext({
+    content: args.content,
+    tasks: args.context.recentTasks,
+  });
+  if (!matchedTask || !isTaskCompletionLikeMessage(args.content)) {
+    return args.extraction;
+  }
+
+  return {
+    ...args.extraction,
+    classification: "question" as const,
+    habitName: null,
+    shouldLogCheckIn: false,
+    checkInStatus: null,
+    questionFocus: "status" as const,
+    needsWorkoutClarification: false,
+    workout: null,
+  };
+}
+
 function isHabitScheduledOnDay(habit: Doc<"habits"> | null, dayKey: string) {
   return Boolean(habit && habit.targetDays.includes(dayKey));
 }
@@ -1762,6 +2071,7 @@ async function applyOperationalSafetyResolution(args: {
         "Example: 'geser gym besok jam 9 malam' -> reschedule_habit_time, false. " +
         "Example: 'reschedule task tadi jadi jam 9 malam' -> reschedule_task_time, true when date is still missing. " +
         "Example: 'task tadi udah beres' -> mark_task_done, false when target task is clear from context. " +
+        "Example: recentTasks contains 'bangun pagi', user='dude, i already waking up' -> mark_task_done, false. " +
         "Example: 'ingetin lagi task tadi 10 menit sebelumnya' -> add_task_reminder, false when target task is clear from context. " +
         "Example: 'yang paling enak digeser apa besok?' -> simple_reschedule_suggestion, false. " +
         "Example: pendingAction=create_task follow up client, user='besok jam 10 pagi' -> create_task, continuePendingAction=true, false. " +
@@ -2149,6 +2459,11 @@ async function extractChatOutcome(input: {
       : null,
     activeHabits: input.context.activeHabits.map(summarizeHabit),
     todayCheckIns: input.context.todayCheckIns.map(summarizeCheckIn),
+    recentTasks: input.context.recentTasks.slice(0, 5).map((t) => ({
+      title: t.title,
+      status: t.status,
+      time: t.time,
+    })),
     recentMessages,
     userMessage: input.content,
   };
@@ -2160,6 +2475,7 @@ async function extractChatOutcome(input: {
         "You classify habit-coach chat messages into structured JSON only. " +
         "Return valid JSON with keys classification, habitName, shouldLogCheckIn, checkInStatus, questionFocus, reason, conversationSummary, needsWorkoutClarification, workout. " +
         "classification must be one of completed, missed, question, excuse, bonus, clarify_workout. " +
+        "CRITICAL: Habit completions must be related to activeHabits only. If the user is obviously talking about finishing a one-off task from recentTasks, do not attach the message to any habit. Leave habitName null. " +
         "Use currentTimeContext when the user asks whether something is still safe today, already late, or already missed. " +
         "checkInStatus must be completed, missed, bonus, or null. " +
         "questionFocus must be one of general, pattern, status, schedule. " +
@@ -2177,6 +2493,7 @@ async function extractChatOutcome(input: {
         "Examples: user='gue gagal gym hari ini karena ketiduran' -> classification='missed', checkInStatus='missed'. " +
         "Example: user='progress gym gue akhir-akhir ini gimana?' -> classification='question', questionFocus='pattern'. " +
         "Example: user='hari ini gue udah beres gym' -> classification='completed' unless workout detail is still missing and needsWorkoutClarification=true. " +
+        "Example: user='dude, i already waking up' with recent task 'bangun pagi' -> classification='question', habitName=null. " +
         "Do not add markdown or prose.",
     },
     {
@@ -2266,25 +2583,111 @@ function findTaskByTitle(
 function resolveRecentTaskForImplicitReschedule(args: {
   content: string;
   context: ChatContext;
+  intent: OperationalIntent | null;
 }) {
-  const latestTask = args.context.recentTasks[0] ?? null;
-  if (!latestTask || latestTask.status !== "pending") {
-    return null;
-  }
-
   const recentTaskUpdate = args.context.recentMessages
     .slice(-4)
     .some(
       (message) =>
         message.role === "ai" &&
-        (message.intent === "task_update" || message.intent === "create_task"),
+        (message.intent === "task_update" ||
+          message.intent === "create_task" ||
+          message.intent === "task_reminder"),
     );
-  const hasTaskCue = includesTaskRescheduleCue(args.content);
+  const hasTaskCue =
+    includesTaskRescheduleCue(args.content) ||
+    args.content.toLowerCase().includes("selesai") ||
+    args.content.toLowerCase().includes("done") ||
+    args.content.toLowerCase().includes("beres");
   if (!recentTaskUpdate && !hasTaskCue) {
     return null;
   }
 
-  return latestTask;
+  const matchedTask =
+    matchTaskFromRecentContext({
+      content: args.content,
+      tasks: args.context.recentTasks,
+    }) ?? args.context.recentTasks[0] ?? null;
+  if (!matchedTask) {
+    return null;
+  }
+
+  if (
+    args.intent !== "mark_task_done" &&
+    matchedTask.status !== "pending"
+  ) {
+    return null;
+  }
+
+  return matchedTask;
+}
+
+function applyDeterministicScheduleOverride(args: {
+  content: string;
+  extraction: OperationalExtractionResult | null;
+  context: ChatContext;
+}) {
+  if (!args.extraction?.intent) {
+    return args.extraction;
+  }
+
+  if (
+    args.extraction.intent !== "create_task" &&
+    args.extraction.intent !== "reschedule_task_time" &&
+    args.extraction.intent !== "reschedule_habit_time" &&
+    args.extraction.intent !== "add_task_reminder"
+  ) {
+    return args.extraction;
+  }
+
+  const parsedTargetTime = parseDeterministicTime(args.content);
+  const parsedTargetDate = inferDeterministicDate(args.content, args.context);
+  return {
+    ...args.extraction,
+    targetTime:
+      parsedTargetTime &&
+      (hasDeterministicTimeCue(args.content) || !isTimeKey(args.extraction.targetTime))
+        ? parsedTargetTime
+        : args.extraction.targetTime,
+    targetDate:
+      parsedTargetDate != null
+        ? parsedTargetDate
+        : args.extraction.targetDate,
+  };
+}
+
+function applyImplicitTaskCompletionOverride(args: {
+  content: string;
+  extraction: OperationalExtractionResult | null;
+  context: ChatContext;
+}) {
+  const matchedTask = matchTaskFromRecentContext({
+    content: args.content,
+    tasks: args.context.recentTasks,
+  });
+  if (!matchedTask || !isTaskCompletionLikeMessage(args.content)) {
+    return args.extraction;
+  }
+
+  if (
+    args.extraction?.intent &&
+    args.extraction.intent !== "mark_task_done"
+  ) {
+    return args.extraction;
+  }
+
+  return {
+    intent: "mark_task_done",
+    habitName: null,
+    targetDate: matchedTask.date,
+    targetTime: matchedTask.time ?? null,
+    taskTitle: matchedTask.title,
+    taskId: matchedTask._id,
+    reminderOffsetMinutes: args.extraction?.reminderOffsetMinutes ?? null,
+    continuePendingAction: false,
+    supersedePendingAction: false,
+    clarificationQuestion: null,
+  } satisfies OperationalExtractionResult;
 }
 
 function applyDeterministicOperationalOverride(args: {
@@ -2359,6 +2762,7 @@ function applyRecentEntityOperationalOverride(args: {
   const recentTask = resolveRecentTaskForImplicitReschedule({
     content: args.content,
     context: args.context,
+    intent: args.extraction.intent,
   });
   if (!recentTask) {
     return args.extraction;
@@ -2466,6 +2870,7 @@ async function extractOperationalOutcome(input: {
         "Example: user='ingetin balik rumah setengah jam lagi' -> intent='create_task', taskTitle='balik rumah', targetTime computed from currentTimeContext, reminderOffsetMinutes=0. " +
         "Example: user='reschedule task tadi ke jam 9 malam' -> intent='reschedule_task_time'. " +
         "Example: user='task review deck udah selesai' -> intent='mark_task_done'. " +
+        "Example: recentTasks contains 'bangun pagi', user='dude, i already waking up' -> intent='mark_task_done'. " +
         "Example: user='ingetin lagi task tadi 10 menit sebelumnya' -> intent='add_task_reminder', reminderOffsetMinutes=10. " +
         "Example: user='berapa jarak bumi ke bulan?' -> intent='none'. " +
         "Do not add markdown or prose outside JSON.",
@@ -3221,7 +3626,7 @@ async function generateOperationalReply(input: {
     {
       role: "system",
       content:
-         "You are the Streak coach: blunt, concise, slightly brutal, never rambling. " +
+        "You are the Streak coach: blunt, concise, slightly brutal, never rambling. " +
         "Keep it concise, natural, and useful. No markdown unless the reply is a planner list. " +
         "Reply in the same language as the user's message. If the user writes informal Indonesian, reply in informal Indonesian. Do not mix languages unless the user did. " +
         "Voice must stay cynical, direct, and strict. Never sound apologetic or overly polite. " +
@@ -3237,7 +3642,9 @@ async function generateOperationalReply(input: {
         "For create_task confirmation, clearly confirm the task title, date, and time if available. " +
         "For mark_task_done confirmation, clearly confirm the task is done and no longer pending. Give a small 'about time' or 'done finally' energy. " +
         "For add_task_reminder confirmation, clearly confirm the task title and the reminder offset if available. " +
-        "If actionStatus is no_op, say it was already set/logged instead of pretending something changed. " +
+        "If actionStatus is no_op, it means the task or habit is ALREADY done or not found in pending state. Don't confirm a new action. Instead, give a sharp, cynical nod or roast them for reporting something already in the books. Example: 'Udah dari tadi kali, telat lo lapornya.' or 'Udah masuk database, nggak usah diulang-ulang.' " +
+        "If requiredAction is mark_task_done and actionStatus is no_op, prefer roasty wording like 'It was already done. You high?' adapted to the user's language. " +
+        "If the user says 'already woke up' but the 'wake up' task is already done, point out your records are faster than their mouth. " +
         "If actionNoOpReason is not_scheduled_on_target_date, this overrides generic no_op wording. Explicitly say the habit is not scheduled on that date and no mutation was applied. " +
         "If actionNoOpReason is target_date_in_past, explicitly say reschedule was blocked because the requested date is already in the past. " +
         "If actionNoOpReason is target_time_in_past, explicitly say reschedule was blocked because the requested time has already passed. " +
@@ -3301,11 +3708,6 @@ export const sendMessage = action({
     if (context.user.aiDisabled) {
       const userMessageId = (await ctx.runMutation(internal.chat.storeMessage, {
         userId: context.user._id,
-        habitId:
-          context.pendingClarificationHabitId ??
-          (context.todayHabits.length === 1
-            ? context.todayHabits[0]?._id
-            : undefined),
         role: "user",
         content,
         intent: "check_in",
@@ -3361,11 +3763,6 @@ export const sendMessage = action({
 
     const userMessageId = (await ctx.runMutation(internal.chat.storeMessage, {
       userId: context.user._id,
-      habitId:
-        context.pendingClarificationHabitId ??
-        (context.todayHabits.length === 1
-          ? context.todayHabits[0]?._id
-          : undefined),
       role: "user",
       content,
       intent: "check_in",
@@ -3413,20 +3810,31 @@ export const sendMessage = action({
       context,
       pendingWorkoutHabit: pendingHabit,
     });
-    const extraction = applyMissKeywordGuard({
+    const extraction = applyDeterministicTaskChatGuard({
       content,
-      extraction: questionSafetyResult.extraction,
-      source: args.source,
+      context,
+      extraction: applyMissKeywordGuard({
+        content,
+        extraction: questionSafetyResult.extraction,
+        source: args.source,
+      }),
     });
     const explicitHabit = findHabitByName(
       context.activeHabits,
       extraction.habitName,
     );
-    const resolvedHabit =
-      explicitHabit ??
-      pendingHabit ??
-      (context.todayHabits.length === 1 ? context.todayHabits[0] : null) ??
-      (context.activeHabits.length === 1 ? context.activeHabits[0] : null);
+
+    // [FIX] Logical Fallacy: Habit Hijacking.
+    // If the last message was a task reminder (habitID unset) and the user didn't explicitly name a habit,
+    // and we have an operational intent for a task, we should NOT force resolve to a default habit.
+    // This prevents "I'm done" from marking a single active habit (like 'github') when replying to a task.
+    const lastMessageWasTaskReminder =
+      context.recentMessages.length > 0 &&
+      context.recentMessages[context.recentMessages.length - 1].role === "ai" &&
+      context.recentMessages[context.recentMessages.length - 1].intent ===
+        "task_reminder" &&
+      !context.recentMessages[context.recentMessages.length - 1].habitId;
+
     const emptyOperationalRoute: OperationalRoute = {
       intent: null,
       requiredAction: null,
@@ -3450,17 +3858,48 @@ export const sendMessage = action({
       pendingAction,
     });
     const deterministicOperationalExtraction =
-      applyDeterministicOperationalOverride({
+      applyDeterministicScheduleOverride({
         content,
-        extraction: operationalSafetyResult.extraction ?? null,
+        extraction: applyDeterministicOperationalOverride({
+          content,
+          extraction: operationalSafetyResult.extraction ?? null,
+          context,
+          pendingAction,
+        }),
         context,
-        pendingAction,
       });
-    const operationalExtraction = applyRecentEntityOperationalOverride({
+    const operationalExtraction = applyImplicitTaskCompletionOverride({
       content,
-      extraction: deterministicOperationalExtraction,
+      extraction: applyRecentEntityOperationalOverride({
+        content,
+        extraction: deterministicOperationalExtraction,
+        context,
+      }),
       context,
     });
+    const matchedTaskFromContext = matchTaskFromRecentContext({
+      content,
+      tasks: context.recentTasks,
+    });
+    const shouldSuppressDefaultHabit =
+      (!explicitHabit &&
+        matchedTaskFromContext != null &&
+        (operationalExtraction?.intent !== null ||
+          extraction.classification === "question" ||
+          isTaskCompletionLikeMessage(content))) ||
+      (lastMessageWasTaskReminder &&
+        !explicitHabit &&
+        operationalExtraction?.intent !== null);
+
+    const resolvedHabit =
+      explicitHabit ??
+      pendingHabit ??
+      (shouldSuppressDefaultHabit
+        ? null
+        : ((context.todayHabits.length === 1 ? context.todayHabits[0] : null) ??
+          (context.activeHabits.length === 1
+            ? context.activeHabits[0]
+            : null)));
     const operationalRoute = operationalExtraction
       ? (buildOperationalRoute({
           extraction: operationalExtraction,

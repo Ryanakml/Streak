@@ -12,14 +12,17 @@ const jetBrainsMono = JetBrains_Mono({
   subsets: ["latin"],
 });
 
+const isDev = process.env.NODE_ENV === "development";
+const appTitle = isDev ? "Streak - dev" : "Streak";
+
 export const metadata: Metadata = {
   title: {
-    default: "Streak",
-    template: "%s | Streak",
+    default: appTitle,
+    template: `%s | ${appTitle}`,
   },
   description:
     "Streak helps you build habits, stay consistent, and get AI-powered accountability to keep your routine on track.",
-  applicationName: "Streak",
+  applicationName: appTitle,
   alternates: {
     canonical: "/",
   },
@@ -30,8 +33,6 @@ export const metadata: Metadata = {
       index: true,
       follow: true,
       "max-image-preview": "large",
-      "max-snippet": -1,
-      "max-video-preview": -1,
     },
   },
   keywords: [
@@ -44,10 +45,10 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     url: "/",
-    title: "Streak",
+    title: appTitle,
     description:
       "Build better habits with streak tracking, reminders, and AI accountability.",
-    siteName: "Streak",
+    siteName: appTitle,
     images: [
       {
         url: "/logo.svg",
