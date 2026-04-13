@@ -487,9 +487,9 @@ function getTaskRiskNote(task: Pick<Doc<"agentTasks">, "status" | "time">) {
 
 function findConflictMap(items: PlannerItem[]) {
   const conflictMap = new Map<string, string[]>();
-  const timedPendingItems = items.filter(
-    (item) => item.scheduledTime && item.status === "pending",
-  );
+  const timedPendingItems = items
+    .filter((item) => item.scheduledTime && item.status === "pending")
+    .sort(comparePlannerItems);
 
   for (let index = 0; index < timedPendingItems.length; index += 1) {
     const current = timedPendingItems[index];
@@ -834,9 +834,10 @@ function buildPlanForDate(args: {
       }),
     }));
 
-  const items = applyConflictHints([...filteredHabitItems, ...taskItems]).sort(
+  const sortedItems = [...filteredHabitItems, ...taskItems].sort(
     comparePlannerItems,
   );
+  const items = applyConflictHints(sortedItems);
 
   return {
     date: args.date,

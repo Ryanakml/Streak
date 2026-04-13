@@ -412,9 +412,12 @@ export const processTaskReminderSmoke = action({
       });
     }
 
-    const messages = (await ctx.runQuery(internal.messages.listByUserForDebug, {
-      userId: user._id,
-    })) as Array<{
+    const messages = (await ctx.runQuery(
+      internal.devSeeds.listTaskReminderMessagesForUser,
+      {
+        userId: user._id,
+      },
+    )) as Array<{
       id: Id<"messages">;
       createdAt: number;
       isTaskReminder: boolean;
@@ -436,6 +439,23 @@ export const processTaskReminderSmoke = action({
           contentOmitted: message.contentOmitted,
         })),
     };
+  },
+});
+
+export const listTaskReminderMessagesForUser = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const messages = (await ctx.db
+      .query("messages")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect()) as Doc<"messages">[];
+
+    return messages.map((message) => ({
+      id: message._id,
+      createdAt: message._creationTime,
+      isTaskReminder: message.intent === "task_reminder",
+      contentOmitted: true as const,
+    }));
   },
 });
 
@@ -1444,6 +1464,98 @@ async function clearAllUserConversationState(
     await ctx.db.delete(episode._id);
   }
 }
+
+async function buildCase4VerificationSnapshot(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+) {
+  const habits = (
+    (await ctx.db
+      .query("habits")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect()) as Doc<"habits">[]
+  ).sort((left, right) => left.name.localeCompare(right.name));
+  const tasks = (
+    (await ctx.db
+      .query("agentTasks")
+      .withIndex("by_user_date", (q) => q.eq("userId", userId))
+      .collect()) as Doc<"agentTasks">[]
+  ).sort((left, right) => left.updatedAt - right.updatedAt);
+  const messages = (
+    (await ctx.db
+      .query("messages")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect()) as Doc<"messages">[]
+  ).sort((left, right) => left.timestamp - right.timestamp);
+  const actionLogs = (
+    (await ctx.db
+      .query("agentActionLogs")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect()) as Doc<"agentActionLogs">[]
+  ).sort((left, right) => left.createdAt - right.createdAt);
+
+  return {
+    habits: habits.map((habit) => ({
+      id: habit._id,
+      name: habit.name,
+      targetDays: habit.targetDays,
+      scheduledTime: habit.scheduledTime,
+      reminderTime: habit.reminderTime,
+      checkInDeadline: habit.checkInDeadline,
+      isActive: habit.isActive,
+    })),
+    tasks: tasks.map((task) => ({
+      id: task._id,
+      title: task.title,
+      date: task.date,
+      time: task.time ?? null,
+      status: task.status,
+      source: task.source,
+      doneAt: task.doneAt ?? null,
+      updatedAt: task.updatedAt,
+    })),
+    messages: messages.map((message) => ({
+      id: message._id,
+      role: message.role,
+      intent: message.intent ?? null,
+      habitId: message.habitId ?? null,
+      content: message.content,
+      timestamp: message.timestamp,
+    })),
+    actionLogs: actionLogs.map((log) => ({
+      id: log._id,
+      intent: log.intent,
+      actionType: log.actionType,
+      targetType: log.targetType,
+      targetId: log.targetId ?? null,
+      status: log.status,
+      inputSummary: log.inputSummary,
+      resultSummary: log.resultSummary ?? null,
+      createdAt: log.createdAt,
+    })),
+  };
+}
+
+export const getCase4VerificationSnapshot = query({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgsInQuery(ctx, args);
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    return {
+      userId: user._id,
+      userEmail: user.email,
+      timezone: user.timezone ?? "UTC",
+      snapshot: await buildCase4VerificationSnapshot(ctx, user._id),
+    };
+  },
+});
 
 export const resolveSeedUser = internalQuery({
   args: {
@@ -3656,6 +3768,96 @@ export const seedPhase5Verification = mutation({
         `besok review retro jam 9 pagi`,
         `telepon ibu jam 8 malam besok`,
         `tambah task ${PHASE5_SEED_PREFIX} follow up client`,
+      ],
+    };
+  },
+});
+
+export const seedCase4Verification = mutation({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    today: v.string(),
+    resetExisting: v.optional(v.boolean()),
+    confirmation: v.literal("case4-verification"),
+  },
+  handler: async (ctx, args) => {
+    const user = await findUserFromArgs(ctx, args);
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    if (args.resetExisting !== false) {
+      await clearUserWorkspace(ctx, user._id);
+      await ctx.db.patch(user._id, {
+        dailyMessageCount: 0,
+        lastMessageReset: Date.now(),
+      });
+    }
+
+    const timezone = user.timezone ?? "UTC";
+    const todayDayKey = dayKeyFromDateKey(args.today);
+    const now = Date.now();
+
+    const githubHabitId = await ctx.db.insert("habits", {
+      userId: user._id,
+      name: "github",
+      targetDays: [todayDayKey],
+      scheduledTime: "23:00",
+      reminderTime: "22:30",
+      checkInDeadline: "23:59",
+      rules: "Ship something on GitHub before the day dies.",
+      motivation: "No fake productive cosplay. Push real work.",
+      currentStreak: 0,
+      bestStreak: 0,
+      isActive: true,
+      createdAt: now,
+    });
+
+    const replayMoments = {
+      createTaskAt: toTimestampInTimezone(args.today, "01:00", timezone),
+      processRemindersBefore: toTimestampInTimezone(args.today, "08:00", timezone),
+      lateWakeCheckAt: toTimestampInTimezone(args.today, "13:00", timezone),
+      askPlanAt: toTimestampInTimezone(args.today, "13:05", timezone),
+      duplicateWakeCheckAt: toTimestampInTimezone(args.today, "13:10", timezone),
+    };
+
+    return {
+      userId: user._id,
+      email: user.email,
+      clerkId: user.clerkId,
+      timezone,
+      today: args.today,
+      habit: {
+        id: githubHabitId,
+        name: "github",
+        scheduledTime: "23:00",
+      },
+      replayMoments,
+      suggestedFlow: [
+        {
+          at: "01:00",
+          message: "task baru, bangun pagi nanti pagi jam 8",
+        },
+        {
+          at: "13:00",
+          message: "dude, i already waking up",
+        },
+        {
+          at: "13:05",
+          message: "hari ini ada apa aja?",
+        },
+        {
+          at: "13:10",
+          message: "gua udah bangun lagi",
+        },
+      ],
+      notes: [
+        "Seed ini sengaja cuma bikin 1 habit github biar context leak ke habit lain kelihatan jelas kalau masih rusak.",
+        "Plain task dari chat masih pakai default reminder offset 30 menit. Replay script proses due reminders sampai 08:00, jadi reminder yang jatuh 07:30 tetap akan terkirim sebelum step jam 13:00.",
+        "Kalau mau ngetes parser slang juga, ganti step pertama jadi: task baru, bangun pagi nanti pagi jam setengah sembilan",
       ],
     };
   },

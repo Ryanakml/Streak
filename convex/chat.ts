@@ -181,9 +181,7 @@ export const getChatContext = internalQuery({
     const recentTasks = (
       await ctx.db
         .query("agentTasks")
-        .withIndex("by_user_status", (q) =>
-          q.eq("userId", user._id).eq("status", "pending"),
-        )
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
         .collect()
     )
       .sort((left, right) => right.updatedAt - left.updatedAt)
