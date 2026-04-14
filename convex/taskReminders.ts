@@ -1,5 +1,5 @@
 import { addMinutes } from "date-fns";
-import { fromZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalMutation,
@@ -16,6 +16,7 @@ type TaskReminderRewriteContext = {
   taskTitle: string;
   taskDate: string;
   taskTime: string;
+  reminderLocalTime: string;
   offsetMinutes: number;
   languageHint: "indonesian" | "english";
 };
@@ -357,6 +358,11 @@ export const processReminder = internalMutation({
           taskTitle: task.title,
           taskDate: task.date,
           taskTime: task.time,
+          reminderLocalTime: formatInTimeZone(
+            new Date(reminder.scheduledFor),
+            getTimezone(user),
+            "HH:mm",
+          ),
           offsetMinutes: reminder.offsetMinutes,
           languageHint: getLanguageHint(task.title),
         } satisfies TaskReminderRewriteContext,

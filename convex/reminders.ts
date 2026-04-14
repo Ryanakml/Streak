@@ -66,6 +66,7 @@ type ReminderRewriteContext = {
   reminderType: ReminderType;
   currentTimelinePoint: ReminderTimelinePoint;
   reminderDate: string;
+  reminderLocalTime: string;
   scheduledTime: string;
   deadline: string;
   scheduledDeltaMinutes: number;
@@ -866,6 +867,10 @@ function buildReminderRewriteContext(args: {
     reminderType: args.reminder.type,
     currentTimelinePoint: getTimelinePoint(args.reminder.type),
     reminderDate: args.reminder.date,
+    reminderLocalTime: formatReminderLocalTime(
+      args.reminder.scheduledFor,
+      args.timezone,
+    ),
     scheduledTime: args.schedule.scheduledTime,
     deadline: args.schedule.checkInDeadline,
     scheduledDeltaMinutes: Math.round(

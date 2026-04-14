@@ -364,6 +364,19 @@ type ChatContext = {
   pendingClarificationHabitId: Id<"habits"> | null;
 };
 
+type TaskQuestionContext = {
+  title: string;
+  date: string;
+  time: string | null;
+  status: Doc<"agentTasks">["status"];
+  source:
+    | "matched_recent_task"
+    | "last_task_reminder"
+    | "latest_pending_task";
+  fromReminderReply: boolean;
+  progressUpdate: boolean;
+};
+
 function normalizeIntent(intent: string | null | undefined): ChatIntent {
   if (intent && CHAT_INTENTS.includes(intent as ChatIntent)) {
     return intent as ChatIntent;
@@ -503,12 +516,173 @@ const TASK_NEGATION_PHRASES = [
   "belum beres",
 ] as const;
 
+const TASK_PROGRESS_PHRASES = [
+  "still in progress",
+  "in progress",
+  "masih progress",
+  "masih in progress",
+  "ongoing",
+  "lagi ngerjain",
+  "lagi kerjain",
+  "lagi gua kerjain",
+  "lagi gue kerjain",
+  "lagi aku kerjain",
+  "masih gue kerjain",
+  "masih gua kerjain",
+  "masih aku kerjain",
+  "belum selesai",
+  "belum beres",
+  "masih jalan",
+] as const;
+
 function normalizeLooseText(text: string) {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getHabitMentionEntries(content: string, habits: Doc<"habits">[]) {
+  return habits
+    .map((habit) => ({
+      habit,
+      normalizedName: normalizeLooseText(habit.name),
+    }))
+    .filter((entry) => entry.normalizedName.length > 0)
+    .sort(
+      (left, right) => right.normalizedName.length - left.normalizedName.length,
+    );
+}
+
+function findCorrectedHabitMention(content: string, habits: Doc<"habits">[]) {
+  const normalizedContent = normalizeLooseText(content);
+  const entries = getHabitMentionEntries(content, habits);
+
+  for (const fromEntry of entries) {
+    const correctionPrefixes = [
+      `bukan ${fromEntry.normalizedName}`,
+      `not ${fromEntry.normalizedName}`,
+    ];
+    const fromIndex = correctionPrefixes
+      .map((prefix) => normalizedContent.indexOf(prefix))
+      .find((index) => index >= 0);
+
+    if (fromIndex == null || fromIndex < 0) {
+      continue;
+    }
+
+    for (const toEntry of entries) {
+      if (toEntry.habit._id === fromEntry.habit._id) {
+        continue;
+      }
+
+      const correctionTargets = [
+        `tapi ${toEntry.normalizedName}`,
+        `tp ${toEntry.normalizedName}`,
+        `but ${toEntry.normalizedName}`,
+      ];
+      const targetIndex = correctionTargets
+        .map((prefix) => normalizedContent.indexOf(prefix))
+        .find((index) => index >= 0);
+
+      if (targetIndex != null && targetIndex > fromIndex) {
+        return toEntry.habit;
+      }
+    }
+  }
+
+  return null;
+}
+
+function findExplicitHabitFromContent(args: {
+  content: string;
+  habits: Doc<"habits">[];
+  fallbackHabitName?: string | null;
+}) {
+  const corrected = findCorrectedHabitMention(args.content, args.habits);
+  if (corrected) {
+    return corrected;
+  }
+
+  const fallback = findHabitByName(args.habits, args.fallbackHabitName ?? null);
+  if (fallback) {
+    return fallback;
+  }
+
+  const normalizedContent = normalizeLooseText(args.content);
+  const mentioned = getHabitMentionEntries(args.content, args.habits)
+    .filter((entry) => normalizedContent.includes(entry.normalizedName))
+    .map((entry) => entry.habit);
+
+  if (mentioned.length === 1) {
+    return mentioned[0];
+  }
+
+  return null;
+}
+
+function isTaskProgressLikeMessage(content: string) {
+  const normalized = normalizeLooseText(content);
+  return TASK_PROGRESS_PHRASES.some((phrase) => normalized.includes(phrase));
+}
+
+function applyExplicitHabitNameOverrideToChatExtraction(args: {
+  content: string;
+  extraction: ChatExtractionResult;
+  activeHabits: Doc<"habits">[];
+}) {
+  const explicitHabit = findExplicitHabitFromContent({
+    content: args.content,
+    habits: args.activeHabits,
+    fallbackHabitName: args.extraction.habitName,
+  });
+  if (!explicitHabit) {
+    return args.extraction;
+  }
+
+  return {
+    ...args.extraction,
+    habitName: explicitHabit.name,
+  };
+}
+
+function applyExplicitHabitCompletionOperationalGuard(args: {
+  content: string;
+  extraction: OperationalExtractionResult | null;
+  activeHabits: Doc<"habits">[];
+}) {
+  if (!args.extraction) {
+    return null;
+  }
+
+  const explicitHabit = findExplicitHabitFromContent({
+    content: args.content,
+    habits: args.activeHabits,
+    fallbackHabitName: args.extraction.habitName,
+  });
+  if (!explicitHabit) {
+    return args.extraction;
+  }
+
+  if (
+    args.extraction.intent === "mark_task_done" &&
+    isTaskCompletionLikeMessage(args.content)
+  ) {
+    return {
+      ...args.extraction,
+      intent: null,
+      habitName: explicitHabit.name,
+      taskTitle: null,
+      taskId: null,
+      clarificationQuestion: null,
+    };
+  }
+
+  return {
+    ...args.extraction,
+    habitName: explicitHabit.name,
+  };
 }
 
 function parseLooseNumber(value: string) {
@@ -830,11 +1004,23 @@ function applyDeterministicTaskChatGuard(args: {
   extraction: ChatExtractionResult;
   context: ChatContext;
 }) {
+  const explicitHabit = findExplicitHabitFromContent({
+    content: args.content,
+    habits: args.context.activeHabits,
+    fallbackHabitName: args.extraction.habitName,
+  });
+  if (explicitHabit) {
+    return args.extraction;
+  }
+
   const matchedTask = matchTaskFromRecentContext({
     content: args.content,
     tasks: args.context.recentTasks,
   });
-  if (!matchedTask || !isTaskCompletionLikeMessage(args.content)) {
+  const taskishMessage =
+    isTaskCompletionLikeMessage(args.content) ||
+    isTaskProgressLikeMessage(args.content);
+  if (!matchedTask || !taskishMessage) {
     return args.extraction;
   }
 
@@ -848,6 +1034,57 @@ function applyDeterministicTaskChatGuard(args: {
     needsWorkoutClarification: false,
     workout: null,
   };
+}
+
+function buildTaskQuestionContext(args: {
+  content: string;
+  context: ChatContext;
+  extraction: ChatExtractionResult;
+  resolvedHabit: Doc<"habits"> | null;
+}) {
+  if (args.extraction.classification !== "question" || args.resolvedHabit) {
+    return null;
+  }
+
+  const progressUpdate = isTaskProgressLikeMessage(args.content);
+  const lastTaskReminder =
+    args.context.recentMessages
+      .slice()
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "ai" &&
+          message.intent === "task_reminder" &&
+          !message.habitId,
+      ) ?? null;
+  const matchedTask = matchTaskFromRecentContext({
+    content: args.content,
+    tasks: args.context.recentTasks,
+  });
+  const latestPendingTask =
+    args.context.recentTasks.find((task) => task.status === "pending") ?? null;
+  const task =
+    matchedTask ??
+    (lastTaskReminder ? latestPendingTask ?? args.context.recentTasks[0] : null) ??
+    (progressUpdate ? latestPendingTask : null);
+
+  if (!task) {
+    return null;
+  }
+
+  return {
+    title: task.title,
+    date: task.date,
+    time: task.time ?? null,
+    status: task.status,
+    source: matchedTask
+      ? ("matched_recent_task" as const)
+      : lastTaskReminder
+        ? ("last_task_reminder" as const)
+        : ("latest_pending_task" as const),
+    fromReminderReply: Boolean(lastTaskReminder),
+    progressUpdate,
+  } satisfies TaskQuestionContext;
 }
 
 function isHabitScheduledOnDay(habit: Doc<"habits"> | null, dayKey: string) {
@@ -2755,6 +2992,15 @@ function applyImplicitTaskCompletionOverride(args: {
   extraction: OperationalExtractionResult | null;
   context: ChatContext;
 }) {
+  const explicitHabit = findExplicitHabitFromContent({
+    content: args.content,
+    habits: args.context.activeHabits,
+    fallbackHabitName: args.extraction?.habitName ?? null,
+  });
+  if (explicitHabit) {
+    return args.extraction;
+  }
+
   const matchedTask = matchTaskFromRecentContext({
     content: args.content,
     tasks: args.context.recentTasks,
@@ -2850,6 +3096,15 @@ function applyRecentEntityOperationalOverride(args: {
     args.extraction.taskTitle ||
     args.extraction.taskId
   ) {
+    return args.extraction;
+  }
+
+  const explicitHabit = findExplicitHabitFromContent({
+    content: args.content,
+    habits: args.context.activeHabits,
+    fallbackHabitName: args.extraction.habitName,
+  });
+  if (explicitHabit) {
     return args.extraction;
   }
 
@@ -3455,6 +3710,13 @@ async function generateCoachReply(input: {
     input.context,
     input.context.todayHabit,
   );
+  const taskQuestionContext = buildTaskQuestionContext({
+    content: input.content,
+    context: input.context,
+    extraction: input.extraction,
+    resolvedHabit: input.resolvedHabit,
+  });
+  const hasTaskQuestionContext = Boolean(taskQuestionContext);
   const scheduleFactSignal = buildScheduleFactSignal({
     decision: input.decision,
     context: input.context,
@@ -3479,30 +3741,47 @@ async function generateCoachReply(input: {
     shouldLogCheckIn: input.decision.shouldLogCheckIn,
     actionStatus: input.actionStatus ?? null,
     workoutDetailStatus: input.workoutDetailStatus ?? null,
+    taskQuestionContext,
     resolvedHabit: input.resolvedHabit
       ? summarizeHabit(input.resolvedHabit)
       : null,
     resolvedHabitTimeContext,
-    patternSummary: summarizePatternSummary(input.decision.patternSummary),
-    primaryQuestionSignal: getPrimaryQuestionSignal({
-      decision: input.decision,
-      context: input.context,
-      scheduleFactSignal,
-    }),
-    supportingQuestionSignal: getSupportingQuestionSignal({
-      decision: input.decision,
-      context: input.context,
-    }),
+    patternSummary: hasTaskQuestionContext
+      ? null
+      : summarizePatternSummary(input.decision.patternSummary),
+    primaryQuestionSignal: hasTaskQuestionContext
+      ? null
+      : getPrimaryQuestionSignal({
+          decision: input.decision,
+          context: input.context,
+          scheduleFactSignal,
+        }),
+    supportingQuestionSignal: hasTaskQuestionContext
+      ? null
+      : getSupportingQuestionSignal({
+          decision: input.decision,
+          context: input.context,
+        }),
     scheduleFactSignal,
-    globalMemorySummary: input.context.globalMemorySummary,
-    habitMemorySummary: input.context.habitMemorySummary,
-    relevantEpisodes: input.context.relevantEpisodes,
-    todayHabit: input.context.todayHabit
+    globalMemorySummary: hasTaskQuestionContext
+      ? null
+      : input.context.globalMemorySummary,
+    habitMemorySummary: hasTaskQuestionContext
+      ? null
+      : input.context.habitMemorySummary,
+    relevantEpisodes: hasTaskQuestionContext ? [] : input.context.relevantEpisodes,
+    todayHabit: hasTaskQuestionContext
+      ? null
+      : input.context.todayHabit
       ? summarizeHabit(input.context.todayHabit)
       : null,
-    todayHabitTimeContext,
+    todayHabitTimeContext: hasTaskQuestionContext
+      ? null
+      : todayHabitTimeContext,
     todayCheckIns: input.context.todayCheckIns.map(summarizeCheckIn),
-    todayReminderStatus: input.context.todayReminderStatus,
+    todayReminderStatus: hasTaskQuestionContext
+      ? null
+      : input.context.todayReminderStatus,
   };
 
   const result = await callModelTextWithTrace([
@@ -3521,6 +3800,9 @@ async function generateCoachReply(input: {
         "If resolvedTurnKind is checkin_clarification, do not pretend anything was logged yet. " +
         "If workoutDetailStatus is needs_more_detail, ask for more detail and do not confirm success. " +
         "If actionStatus is no_op, acknowledge it was already logged instead of pretending a new mutation happened. " +
+        "If taskQuestionContext exists and resolvedHabit is null, the user is talking about a one-off task, not a habit. " +
+        "For taskQuestionContext, anchor the reply to that task title, status, and time only. Do not talk about streaks, habits, check-ins, or unrelated reminders. " +
+        "If taskQuestionContext.progressUpdate is true, acknowledge the task is still ongoing and keep it non-mutating. " +
         "For completion mode, acknowledge the result with cynical buddy tone, then give side-eye or pressure to stay consistent. " +
         "For completion mode, do not use generic positive or admin closers such as fokus ke, jaga momentum, semangat, keep it up, tunggu jadwal berikutnya, langkah berikutnya, reset dan fokus, or sudah tercatat as a flat opener. " +
         "For miss mode, call out the miss, use at most one relevant pattern signal, and reset focus toward the next scheduled chance. " +
@@ -3904,13 +4186,17 @@ export const sendMessage = action({
       context,
       pendingWorkoutHabit: pendingHabit,
     });
-    const extraction = applyDeterministicTaskChatGuard({
+    const extraction = applyExplicitHabitNameOverrideToChatExtraction({
       content,
-      context,
-      extraction: applyMissKeywordGuard({
+      activeHabits: context.activeHabits,
+      extraction: applyDeterministicTaskChatGuard({
         content,
-        extraction: questionSafetyResult.extraction,
-        source: args.source,
+        context,
+        extraction: applyMissKeywordGuard({
+          content,
+          extraction: questionSafetyResult.extraction,
+          source: args.source,
+        }),
       }),
     });
     const explicitHabit = findHabitByName(
@@ -3952,15 +4238,19 @@ export const sendMessage = action({
       pendingAction,
     });
     const deterministicOperationalExtraction =
-      applyDeterministicScheduleOverride({
+      applyExplicitHabitCompletionOperationalGuard({
         content,
-        extraction: applyDeterministicOperationalOverride({
+        activeHabits: context.activeHabits,
+        extraction: applyDeterministicScheduleOverride({
           content,
-          extraction: operationalSafetyResult.extraction ?? null,
+          extraction: applyDeterministicOperationalOverride({
+            content,
+            extraction: operationalSafetyResult.extraction ?? null,
+            context,
+            pendingAction,
+          }),
           context,
-          pendingAction,
         }),
-        context,
       });
     const operationalExtraction = applyImplicitTaskCompletionOverride({
       content,

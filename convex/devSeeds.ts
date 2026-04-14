@@ -3457,6 +3457,36 @@ export const seedPhase5Verification = mutation({
       createdAt: now,
     });
 
+    const githubHabitId = await ctx.db.insert("habits", {
+      userId: user._id,
+      name: `${PHASE5_SEED_PREFIX} GitHub`,
+      targetDays: [todayDayKey],
+      scheduledTime: "23:00",
+      reminderTime: "22:30",
+      checkInDeadline: "23:59",
+      rules: "Ship one meaningful coding update.",
+      motivation: "Make coding consistency visible every day.",
+      currentStreak: 1,
+      bestStreak: 3,
+      isActive: true,
+      createdAt: now,
+    });
+
+    const issuesHabitId = await ctx.db.insert("habits", {
+      userId: user._id,
+      name: `${PHASE5_SEED_PREFIX} Issues`,
+      targetDays: [todayDayKey],
+      scheduledTime: "21:30",
+      reminderTime: "21:00",
+      checkInDeadline: "23:30",
+      rules: "Clear one important issue queue item.",
+      motivation: "Stop letting issue cleanup drift forever.",
+      currentStreak: 0,
+      bestStreak: 2,
+      isActive: true,
+      createdAt: now,
+    });
+
     for (const seededCheckIn of [
       {
         habitId: gymHabitId,
@@ -3511,6 +3541,15 @@ export const seedPhase5Verification = mutation({
         conversationSummary: "Seeded phase 5 journal completion",
         aiResponse: "Seed completion",
         timestamp: toTimestamp(twoDaysAgo, "21:10"),
+      },
+      {
+        habitId: githubHabitId,
+        date: yesterday,
+        status: "completed" as const,
+        userReason: undefined,
+        conversationSummary: "Seeded phase 5 github completion",
+        aiResponse: "Seed completion",
+        timestamp: toTimestamp(yesterday, "23:10"),
       },
     ]) {
       await ctx.db.insert("checkIns", {
@@ -3623,6 +3662,16 @@ export const seedPhase5Verification = mutation({
         time: input.time ?? null,
         status: input.status ?? "pending",
       });
+
+      if (input.time && (input.status ?? "pending") === "pending") {
+        await ctx.runMutation(internal.taskReminders.scheduleReminderForTask, {
+          taskId: id,
+          userId: user._id,
+          offsetMinutes: 30,
+          source: "default",
+          now,
+        });
+      }
     };
 
     await insertRun({
@@ -3713,7 +3762,7 @@ export const seedPhase5Verification = mutation({
     await insertTask({
       title: `${PHASE5_SEED_PREFIX} Send Invoice`,
       date: args.today,
-      time: "18:15",
+      time: "08:15",
     });
     await insertTask({
       title: `${PHASE5_SEED_PREFIX} Admin Cleanup`,
@@ -3728,6 +3777,11 @@ export const seedPhase5Verification = mutation({
       title: `${PHASE5_SEED_PREFIX} Call Mom`,
       date: tomorrow,
       time: "21:00",
+    });
+    await insertTask({
+      title: `${PHASE5_SEED_PREFIX} GitHub cleanup`,
+      date: args.today,
+      time: "22:15",
     });
 
     return {
@@ -3755,6 +3809,16 @@ export const seedPhase5Verification = mutation({
           id: journalHabitId,
           name: `${PHASE5_SEED_PREFIX} Journal`,
           purpose: "tomorrow late habit",
+        },
+        {
+          id: githubHabitId,
+          name: `${PHASE5_SEED_PREFIX} GitHub`,
+          purpose: "habit-vs-task collision guard",
+        },
+        {
+          id: issuesHabitId,
+          name: `${PHASE5_SEED_PREFIX} Issues`,
+          purpose: "habit correction follow-up target",
         },
       ],
       reminderRuns: insertedRuns,
@@ -3986,6 +4050,65 @@ export const processPhase5DueReminders = action({
         limit: args.limit ?? null,
       },
       results,
+    };
+  },
+});
+
+export const processPhase5DueTaskReminders = action({
+  args: {
+    email: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    before: v.optional(v.number()),
+    limit: v.optional(v.number()),
+    confirmation: v.literal("phase5-verification"),
+  },
+  handler: async (ctx, args) => {
+    const user = (await ctx.runQuery(internal.devSeeds.resolveSeedUser, {
+      email: args.email,
+      clerkId: args.clerkId,
+    })) as Doc<"users"> | null;
+
+    if (!user) {
+      throw new Error("Seed target user not found");
+    }
+    await requireSeedTargetAccess(ctx, user);
+
+    const dueReminders = (await ctx.runQuery(internal.taskReminders.listDue, {
+      before: args.before ?? Date.now(),
+    })) as Doc<"taskReminders">[];
+    const scopedReminders = dueReminders
+      .filter((reminder) => reminder.userId === user._id)
+      .slice(0, args.limit ?? 20);
+
+    const deliveries: Array<{
+      reminderId: Id<"taskReminders">;
+      messageId?: Id<"messages">;
+      pushed: number;
+    }> = [];
+
+    for (const reminder of scopedReminders) {
+      const result = (await ctx.runAction(
+        internal.notificationsAction.processSingleTaskReminderDelivery,
+        {
+          reminderId: reminder._id,
+          skipPushDelivery: true,
+        },
+      )) as {
+        messageId?: Id<"messages">;
+        pushed: number;
+      };
+
+      deliveries.push({
+        reminderId: reminder._id,
+        messageId: result.messageId,
+        pushed: result.pushed,
+      });
+    }
+
+    return {
+      userId: user._id,
+      processed: deliveries.length,
+      deliveries,
     };
   },
 });
