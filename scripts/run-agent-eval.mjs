@@ -337,6 +337,75 @@ function normalizeContainsList(values) {
     .filter(Boolean);
 }
 
+function normalizeClockTime({ hour, minute, period = null }) {
+  if (
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    hour < 0 ||
+    hour > 24 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  let hours = hour % 24;
+  const nextPeriod = String(period ?? "").toLowerCase();
+  if (nextPeriod === "pagi" || nextPeriod === "am") {
+    if (hours === 12) {
+      hours = 0;
+    }
+  } else if (nextPeriod === "siang") {
+    if (hours >= 1 && hours <= 11) {
+      hours += 12;
+    }
+  } else if (nextPeriod === "sore") {
+    if (hours >= 1 && hours <= 6) {
+      hours += 12;
+    }
+  } else if (nextPeriod === "malam" || nextPeriod === "pm") {
+    if (hours >= 1 && hours <= 11) {
+      hours += 12;
+    }
+    if (hours === 12) {
+      hours = 0;
+    }
+  }
+
+  return `${String(hours).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function extractExplicitClockTimes(content) {
+  const text = String(content ?? "").toLowerCase();
+  const matches = new Set();
+
+  for (const match of text.matchAll(/\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b/g)) {
+    const normalized = normalizeClockTime({
+      hour: Number(match[1]),
+      minute: Number(match[2]),
+      period: match[3] ?? null,
+    });
+    if (normalized) {
+      matches.add(normalized);
+    }
+  }
+
+  for (const match of text.matchAll(
+    /\bjam\s+(\d{1,2})(?:[:.](\d{2}))?\s*(pagi|siang|sore|malam)\b/g,
+  )) {
+    const normalized = normalizeClockTime({
+      hour: Number(match[1]),
+      minute: match[2] ? Number(match[2]) : 0,
+      period: match[3] ?? null,
+    });
+    if (normalized) {
+      matches.add(normalized);
+    }
+  }
+
+  return [...matches];
+}
+
 function detectFragmentHits(contentNormalized, fragments) {
   const hits = [];
 
@@ -1052,6 +1121,48 @@ function evaluateSingleAssertion(assertion, snapshot) {
           matches.length > 0
             ? "Matching task found."
             : "Expected task was not found.",
+      });
+    }
+
+    case "message_clock_times_allowed": {
+      const matches = snapshot.messages.filter((message) => {
+        return (
+          (!assertion.intent || message.intent === assertion.intent) &&
+          (!assertion.role || message.role === assertion.role) &&
+          (!assertion.contentIncludes ||
+            matchesIncludes(message.content, assertion.contentIncludes))
+        );
+      });
+      const message = matches.at(-1) ?? null;
+      if (!message) {
+        return recordAssertion({
+          assertion,
+          pass: false,
+          matchedCount: 0,
+          detail: "Expected matching message was not found.",
+        });
+      }
+
+      const explicitTimes = extractExplicitClockTimes(message.content);
+      const allowedTimes = new Set(
+        normalizeList(assertion.allowedTimes)
+          .map((entry) => String(entry))
+          .filter(Boolean),
+      );
+      const disallowed = explicitTimes.filter((time) => !allowedTimes.has(time));
+
+      return recordAssertion({
+        assertion,
+        pass: disallowed.length === 0,
+        matchedCount: 1,
+        detail:
+          disallowed.length === 0
+            ? explicitTimes.length === 0
+              ? "No explicit clock times found."
+              : `Explicit times allowed: ${JSON.stringify(explicitTimes)}.`
+            : `Disallowed explicit times found: ${JSON.stringify(disallowed)}.`,
+        actual: explicitTimes,
+        expected: [...allowedTimes],
       });
     }
 

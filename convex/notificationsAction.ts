@@ -4,7 +4,6 @@ import webpush from "web-push";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { buildTaskReminderErrorFallback } from "./taskReminders";
 import { v } from "convex/values";
 import { callModelTextWithFallbackTrace } from "./modelProvider";
 
@@ -31,6 +30,7 @@ type ReminderRewriteContext = {
   reminderType: "pre_workout" | "check_in" | "late_follow_up";
   currentTimelinePoint: "post" | "due" | "deadline";
   reminderDate: string;
+  reminderLocalTime: string;
   scheduledTime: string;
   deadline: string;
   scheduledDeltaMinutes: number;
@@ -77,6 +77,7 @@ type TaskReminderRewriteContext = {
   taskTitle: string;
   taskDate: string;
   taskTime: string;
+  reminderLocalTime: string;
   offsetMinutes: number;
   languageHint: "indonesian" | "english";
 };
@@ -119,6 +120,106 @@ function parseJsonObject(content: string) {
 
 function coerceString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeClockTime(args: {
+  hour: number;
+  minute: number;
+  period?: string | null;
+}) {
+  if (
+    !Number.isFinite(args.hour) ||
+    !Number.isFinite(args.minute) ||
+    args.hour < 0 ||
+    args.hour > 24 ||
+    args.minute < 0 ||
+    args.minute > 59
+  ) {
+    return null;
+  }
+
+  let hours = args.hour % 24;
+  const period = args.period?.toLowerCase() ?? null;
+  if (period === "pagi" || period === "am") {
+    if (hours === 12) {
+      hours = 0;
+    }
+  } else if (period === "siang") {
+    if (hours >= 1 && hours <= 11) {
+      hours += 12;
+    }
+  } else if (period === "sore") {
+    if (hours >= 1 && hours <= 6) {
+      hours += 12;
+    }
+  } else if (period === "malam" || period === "pm") {
+    if (hours >= 1 && hours <= 11) {
+      hours += 12;
+    }
+    if (hours === 12) {
+      hours = 0;
+    }
+  }
+
+  return `${hours.toString().padStart(2, "0")}:${args.minute
+    .toString()
+    .padStart(2, "0")}`;
+}
+
+function extractExplicitClockTimes(content: string) {
+  const text = String(content ?? "");
+  const normalized = text.toLowerCase();
+  const matches = new Set<string>();
+
+  for (const match of normalized.matchAll(
+    /\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b/g,
+  )) {
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const normalizedTime = normalizeClockTime({
+      hour,
+      minute,
+      period: match[3] ?? null,
+    });
+    if (normalizedTime) {
+      matches.add(normalizedTime);
+    }
+  }
+
+  for (const match of normalized.matchAll(
+    /\bjam\s+(\d{1,2})(?:[:.](\d{2}))?\s*(pagi|siang|sore|malam)\b/g,
+  )) {
+    const hour = Number(match[1]);
+    const minute = match[2] ? Number(match[2]) : 0;
+    const normalizedTime = normalizeClockTime({
+      hour,
+      minute,
+      period: match[3] ?? null,
+    });
+    if (normalizedTime) {
+      matches.add(normalizedTime);
+    }
+  }
+
+  return [...matches];
+}
+
+function hasConflictingExplicitTimeMention(args: {
+  content: string;
+  allowedTimes: Array<string | null | undefined>;
+}) {
+  const mentionedTimes = extractExplicitClockTimes(args.content);
+  if (mentionedTimes.length === 0) {
+    return false;
+  }
+
+  const allowed = new Set(
+    args.allowedTimes
+      .map((entry) => coerceString(entry))
+      .filter(Boolean),
+  );
+
+  return mentionedTimes.some((time) => !allowed.has(time));
 }
 
 function looksLikeIndonesian(text: string) {
@@ -175,6 +276,52 @@ function buildReminderErrorFallback(
         chatContent: "Dudeeee",
         pushBody: "Dudeeee",
       };
+}
+
+function buildGroundedHabitReminderFallback(
+  context: ReminderRewriteContext,
+): ReminderCopyRewrite {
+  if (context.languageHint === "indonesian") {
+    if (context.deliveryKind === "completion_interrupt") {
+      return {
+        chatContent: `${context.habitName} akhirnya kelar. Kepepet juga, bro.`,
+        pushBody: `${context.habitName} akhirnya kelar.`,
+      };
+    }
+
+    return {
+      chatContent: `${context.habitName} masih kebuka. Jangan ngeles lagi.`,
+      pushBody: `${context.habitName} belum kelar.`,
+    };
+  }
+
+  if (context.deliveryKind === "completion_interrupt") {
+    return {
+      chatContent: `${context.habitName} finally got done. Barely.`,
+      pushBody: `${context.habitName} finally got done.`,
+    };
+  }
+
+  return {
+    chatContent: `${context.habitName} is still open. Don't ghost it.`,
+    pushBody: `${context.habitName} is still open.`,
+  };
+}
+
+function buildGroundedTaskReminderFallback(
+  context: TaskReminderRewriteContext,
+): ReminderCopyRewrite {
+  if (context.languageHint === "indonesian") {
+    return {
+      chatContent: `Oi. ${context.taskTitle}. Jangan ngilang lagi.`,
+      pushBody: `${context.taskTitle}. Jangan lupa.`,
+    };
+  }
+
+  return {
+    chatContent: `Oi. ${context.taskTitle}. Don't disappear on it.`,
+    pushBody: `${context.taskTitle}. Don't forget it.`,
+  };
 }
 
 function getReminderOpeningStyle(styleSeed: number) {
@@ -234,6 +381,7 @@ async function rewriteReminderCopy(args: { context: ReminderRewriteContext }) {
           "If languageHint is Indonesian, use natural Indo-English slang, not formal Indonesian. " +
           "Use at least one direct buddy cue or command word when it fits: bro, dude, yooo, gerak, gas, fix, langsung, udah, move, akhirnya, jangan. " +
           "Use the context fields directly: currentTimelinePoint, interactionHistory, responsePattern, recentMissReasons, lastUserResponseSummary, voiceDirectives, openingStyle, personaFrame, and completionStatus. " +
+          "If you mention an explicit clock time, it must match reminderLocalTime, scheduledTime, deadline, or completedAtLocalTime exactly. " +
           "Stage rules are strict. " +
           "POST or buddy_nag: wake-up energy, nagging pressure, shrinking window, repeated excuse callout. No cold final verdict and no fake celebration. " +
           "DUE or pressure_now: impatient, demanding, now-or-never. Call out silence, broken promises, hesitation. No future-looking closer like next session or next time. " +
@@ -313,7 +461,7 @@ async function rewriteReminderCopy(args: { context: ReminderRewriteContext }) {
 async function rewriteTaskReminderCopy(args: {
   context: TaskReminderRewriteContext;
 }) {
-  const fallback = buildTaskReminderErrorFallback(args.context.languageHint);
+  const fallback = buildGroundedTaskReminderFallback(args.context);
   const result = await callModelTextWithFallbackTrace(
     [
       {
@@ -327,6 +475,8 @@ async function rewriteTaskReminderCopy(args: {
           "Do not hardcode a template structure. Vary the opening. " +
           "If languageHint is indonesian, use natural informal Indonesian with light slang. " +
           "Mention the task title naturally and make the reminder feel contextual to that task. " +
+          "If you mention an explicit clock time, it must match reminderLocalTime or taskTime exactly. " +
+          "Do not mention streaks, habits, weekly performance, or habit accountability framing. " +
           "Do not invent extra product features or fake state changes. " +
           "Never use maaf, silakan, tolong, mohon, or please.",
       },
@@ -393,25 +543,37 @@ async function finalizeReminderDelivery(
       const rewritten = await rewriteReminderCopy({
         context: result.payload.rewriteContext,
       });
+      const validatedRewrite = hasConflictingExplicitTimeMention({
+        content: `${rewritten.chatContent}\n${rewritten.pushBody}`,
+        allowedTimes: [
+          result.payload.rewriteContext.reminderLocalTime,
+          result.payload.rewriteContext.scheduledTime,
+          result.payload.rewriteContext.deadline,
+          result.payload.rewriteContext.completedAtLocalTime,
+        ],
+      })
+        ? buildGroundedHabitReminderFallback(result.payload.rewriteContext)
+        : rewritten;
 
       await ctx.runMutation(internal.chat.updateStoredMessage, {
         id: result.messageId,
-        content: rewritten.chatContent,
+        content: validatedRewrite.chatContent,
       });
       if (result.checkInCreatedId) {
         await ctx.runMutation(internal.chat.updateCheckInAiResponse, {
           id: result.checkInCreatedId,
-          aiResponse: rewritten.chatContent,
+          aiResponse: validatedRewrite.chatContent,
         });
       }
 
       resolvedPayload = {
         ...resolvedPayload,
-        body: rewritten.pushBody,
+        body: validatedRewrite.pushBody,
       };
     } catch (error) {
-      const languageHint = result.payload.rewriteContext.languageHint;
-      const fallback = buildReminderErrorFallback(languageHint);
+      const fallback = buildGroundedHabitReminderFallback(
+        result.payload.rewriteContext,
+      );
       await ctx.runMutation(internal.chat.updateStoredMessage, {
         id: result.messageId,
         content: fallback.chatContent,
@@ -440,19 +602,29 @@ async function finalizeReminderDelivery(
       const rewritten = await rewriteTaskReminderCopy({
         context: result.payload.taskRewriteContext,
       });
+      const validatedRewrite = hasConflictingExplicitTimeMention({
+        content: `${rewritten.chatContent}\n${rewritten.pushBody}`,
+        allowedTimes: [
+          result.payload.taskRewriteContext.reminderLocalTime,
+          result.payload.taskRewriteContext.taskTime,
+        ],
+      })
+        ? buildGroundedTaskReminderFallback(result.payload.taskRewriteContext)
+        : rewritten;
 
       await ctx.runMutation(internal.chat.updateStoredMessage, {
         id: result.messageId,
-        content: rewritten.chatContent,
+        content: validatedRewrite.chatContent,
       });
 
       resolvedPayload = {
         ...resolvedPayload,
-        body: rewritten.pushBody,
+        body: validatedRewrite.pushBody,
       };
     } catch (error) {
-      const languageHint = result.payload.taskRewriteContext.languageHint;
-      const fallback = buildTaskReminderErrorFallback(languageHint);
+      const fallback = buildGroundedTaskReminderFallback(
+        result.payload.taskRewriteContext,
+      );
       await ctx.runMutation(internal.chat.updateStoredMessage, {
         id: result.messageId,
         content: fallback.chatContent,

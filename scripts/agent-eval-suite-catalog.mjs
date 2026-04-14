@@ -1009,6 +1009,36 @@ export const SUITES = {
         ],
       },
       {
+        id: "p5_habit_completion_with_taskish_evidence",
+        input: "gua udah push pr buat [Seed P5] GitHub hari ini. tolong catat.",
+        expect: COMPLETION_EXPECT,
+        assertions: [
+          {
+            type: "check_in_exists",
+            habitIncludes: "[Seed P5] GitHub",
+            date: "{{today}}",
+            source: "chat",
+            status: "completed",
+          },
+        ],
+      },
+      {
+        id: "p5_habit_correction_after_wrong_first_pick",
+        dependsOn: ["p5_habit_completion_with_taskish_evidence"],
+        input:
+          "bukan [Seed P5] GitHub, tapi [Seed P5] Issues yang udah selesai",
+        expect: COMPLETION_EXPECT,
+        assertions: [
+          {
+            type: "check_in_exists",
+            habitIncludes: "[Seed P5] Issues",
+            date: "{{today}}",
+            source: "chat",
+            status: "completed",
+          },
+        ],
+      },
+      {
         id: "p5_create_task_ambiguous",
         input: "tambah task [Seed P5] follow up client",
         expect: {
@@ -1062,6 +1092,54 @@ export const SUITES = {
         id: "p5_reschedule_future_habit",
         input: "geser [Seed P5] Journal besok jam 10 malam",
         expect: SCHEDULE_EXPECT("reschedule_habit_time"),
+      },
+      {
+        id: "p5_task_reminder_grounded_copy",
+        operation: {
+          fn: "devSeeds:processPhase5DueTaskReminders",
+          confirmation: "phase5-verification",
+          args: {
+            limit: 1,
+          },
+        },
+        resultExpect: [
+          {
+            path: "processed",
+            comparator: "equals",
+            value: 1,
+          },
+        ],
+        expect: {
+          aiMustContainAnyOf: [["send invoice", "invoice"]],
+          aiMustNotContain: ["streak", "habit", "putus"],
+        },
+        assertions: [
+          {
+            type: "message_clock_times_allowed",
+            intent: "task_reminder",
+            role: "ai",
+            contentIncludes: "[Seed P5] Send Invoice",
+            allowedTimes: ["07:45", "08:15"],
+          },
+        ],
+      },
+      {
+        id: "p5_task_progress_after_task_reminder",
+        beforeActions: [
+          {
+            fn: "devSeeds:processPhase5DueTaskReminders",
+            confirmation: "phase5-verification",
+            args: {
+              limit: 1,
+            },
+          },
+        ],
+        input: "still in progress dude",
+        expect: {
+          ...QUESTION_EXPECT,
+          aiMustContainAnyOf: [["send invoice", "invoice"]],
+          aiMustNotContain: ["streak", "[seed p5] gym", "habit"],
+        },
       },
       {
         id: "p5_small_talk_boundary",
